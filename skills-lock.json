@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "skills": {
+    "metrix-bar": {
+      "source": "metrix.bar",
+      "sourceUrl": "https://metrix.bar",
+      "sourceType": "well-known",
+      "computedHash": "90d3e0699ccd310c94b079c56db2bf2e09e33708a7861727d82955c80d4432e0",
+      "wellKnownDigest": "sha256:e658b9febf5280f9d5618bd4fe29aa193db31e7f11b44ee625b70890455cd7b8"
+    }
+  }
+}

@@ -1,0 +1,433 @@
+<bar protocol-version="0" id="beszel" title="Beszel" version="1.0.0" category="monitoring"
+     description="通过 Tailscale 查看 Beszel 主机状态、资源、历史趋势和容器。"
+     license="AGPL-3.0-only" homepage="https://github.com/henrygd/beszel"
+     refresh="30s" material="solid" placements="menubar" open-mode="flyout" icon="server">
+  <permissions>
+    <network origin="{{ inputs.hubURL }}" allow-http="true" />
+  </permissions>
+  <inputs>
+    <input name="hubURL" type="string" label="Beszel Hub" default="http://100.64.0.1:8090" required="true" help="通过 Tailscale 可访问的 Hub 地址，包含协议和端口。" />
+    <input name="email" type="string" label="登录邮箱（可选）" help="只用于预填登录表单。密码在看板内输入，不保存。" />
+    <input name="session" type="secret" label="登录会话（自动管理）" help="首次在看板内登录后自动保存和续期。无需填写探针注册令牌。" />
+    <input name="refreshInterval" type="select" label="刷新间隔" default="30">
+      <option value="15" label="15 秒" />
+      <option value="30" label="30 秒" />
+      <option value="60" label="60 秒" />
+    </input>
+    <input name="trayFormat" type="select" label="菜单栏显示" default="online-bandwidth">
+      <option value="online-bandwidth" label="在线数量 · 总带宽" />
+      <option value="online" label="在线数量" />
+      <option value="cpu" label="平均 CPU" />
+      <option value="bandwidth" label="总带宽" />
+    </input>
+  </inputs>
+  <docs><![CDATA[请保持本机 Tailscale 已连接，并允许访问所填 Beszel Hub。打开看板，用 Beszel 邮箱和密码登录一次。密码只用于本次登录；会话与 Hub 地址绑定，保存在系统钥匙串，并在过期前自动续期。若长期未运行导致会话过期，请重新登录。此处不使用“令牌与指纹”页面的探针注册令牌。主机信息按 Hub 实际采样时间展示，历史数据由 Beszel 提供。]]></docs>
+  <script apis="auth shell localStorage"><![CDATA[
+// SPDX-License-Identifier: AGPL-3.0-only
+// Native composition and loading patterns reference the official Weather dashboard
+// (https://metrix.bar/dashboards/weather.bar, AGPL-3.0-only). Beszel data and auth
+// follow the PocketBase API used by Beszel 0.21.1; no remote modules are loaded.
+const h = (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity).filter(x => x != null && x !== false) });
+const text = (value, tw = '', props = {}) => h('Text', { tw: `text-[13px] text-text ${tw}`, ...props }, String(value));
+const muted = (value, props = {}) => text(value, 'text-[11px] text-textMuted', props);
+const svg = body => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
+const icons = {
+  server: svg('<rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M12 6.5h5M12 17.5h5"/>'),
+  refresh: svg('<path d="M20 7v5h-5M4 17v-5h5M6.1 6a8 8 0 0 1 13.4 3M17.9 18a8 8 0 0 1-13.4-3"/>'),
+  external: svg('<path d="M14 3h7v7M10 14 21 3M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5"/>'),
+  back: svg('<path d="m14 6-6 6 6 6"/>'),
+  shield: svg('<path d="M12 3 4 6v6c0 5 8 9 8 9s8-4 8-9V6l-8-3Z"/><path d="m8 12 3 3 5-6"/>'),
+  alert: svg('<circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 17h.01"/>'),
+};
+const icon = (name, size = 15, color = 'textMuted') => h('Icon', { svg: icons[name], width: size, height: size, fontSize: size, textColor: color, shrink: 0 });
+const button = (name, label, onClick, disabled = false) => h('Button', { key: label, label, tooltip: label, onClick, disabled, tw: 'p-1.5 rounded-md' }, icon(name));
+const finite = v => typeof v === 'number' && Number.isFinite(v);
+const val = v => finite(v) ? v : null;
+const pct = v => finite(v) ? `${Math.max(0, Math.min(100, v)).toFixed(1)}%` : '—';
+const capacityColor = v => v >= 95 ? 'danger' : v >= 80 ? 'warning' : 'accent';
+function bytes(v, rate = false) {
+  if (!finite(v) || v < 0) return '—';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']; let i = 0;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(v >= 100 || i === 0 ? 0 : v >= 10 ? 1 : 2)} ${units[i]}${rate ? '/s' : ''}`;
+}
+function timeValue(v) {
+  if (finite(v)) return v;
+  if (!v || typeof v !== 'string') return 0;
+  let s = v.replace(' ', 'T');
+  if (!/(Z|[+-]\d{2}:?\d{2})$/.test(s)) s += 'Z';
+  return Date.parse(s) || 0;
+}
+function age(t) {
+  if (!t) return '暂无采样';
+  const s = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (s < 60) return `${s} 秒前`;
+  if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
+  if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
+  return `${Math.floor(s / 86400)} 天前`;
+}
+function uptime(v) {
+  if (!finite(v)) return '—';
+  return v >= 86400 ? `${Math.floor(v / 86400)} 天 ${Math.floor(v % 86400 / 3600)} 小时` : `${Math.floor(v / 3600)} 小时 ${Math.floor(v % 3600 / 60)} 分钟`;
+}
+const pbTime = ms => new Date(ms).toISOString().replace('T', ' ').replace('Z', '');
+const query = params => Object.entries(params).filter(([,v]) => v != null).map(([k,v]) => `${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`).join('&');
+const collectionURL = (name, params) => `/api/collections/${name}/records?${query(params)}`;
+const failure = (message, status = 0) => Object.assign(new Error(message), { status });
+let hub = '', hubError = '', token = '', tokenAt = 0, epoch = 0, secretRaw = '';
+let systems = [], latest = new Map(), detailCache = new Map(), selected = '', span = '1h';
+let fetchedAt = 0, loaded = false, error = '', busy = false, inflight = null, renewing = null;
+let email = '', password = '', loginBusy = false, loginError = '', sessionWarning = '';
+let filter = 'all', search = '', sort = 'status', page = 0, loginGeneration = 0;
+let interval = 30, trayFormat = 'online-bandwidth';
+let secretMutation = Promise.resolve();
+try { sort = localStorage.getItem('beszel.sort') || 'status'; } catch {}
+if (!['status', 'name', 'cpu', 'memory', 'network'].includes(sort)) sort = 'status';
+function parseHub(raw) {
+  try {
+    const u = new URL(String(raw || '').trim());
+    if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password || u.search || u.hash) throw 0;
+    return u.origin + u.pathname.replace(/\/+$/, '');
+  } catch { return ''; }
+}
+function readSession() {
+  let raw = '';
+  try { raw = $metrix.secret('session'); } catch {}
+  if (raw === secretRaw) return;
+  secretRaw = raw;
+  token = ''; tokenAt = 0;
+  try {
+    const s = JSON.parse(raw);
+    if (s.hub === hub && typeof s.token === 'string') { token = s.token; tokenAt = Number(s.at) || 0; }
+  } catch {}
+}
+function sync(env) {
+  const inputs = env.inputs || {}, next = parseHub(inputs.hubURL);
+  if (next !== hub) {
+    epoch++; hub = next; token = ''; tokenAt = 0; secretRaw = '';
+    systems = []; latest.clear(); detailCache.clear(); selected = ''; loaded = false; fetchedAt = 0;
+    error = ''; loginError = ''; password = ''; sessionWarning = ''; inflight = null; renewing = null;
+    busy = false; loginBusy = false; loginGeneration++;
+  }
+  hubError = next ? '' : '请在看板设置中填写有效的 Beszel Hub 地址。';
+  interval = [15,30,60].includes(Number(inputs.refreshInterval)) ? Number(inputs.refreshInterval) : 30;
+  trayFormat = inputs.trayFormat || 'online-bandwidth';
+  if (!email && inputs.email) email = String(inputs.email);
+  readSession();
+}
+async function http(path, options = {}) {
+  const target = options.hub || hub, auth = options.token === undefined ? token : options.token;
+  const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch(target + path, { method: options.method || 'GET', signal: controller.signal, redirect: 'error',
+      headers: { Accept: 'application/json', ...(auth ? { Authorization: auth } : {}), ...(options.body ? { 'Content-Type': 'application/json' } : {}) },
+      ...(options.body ? { body: JSON.stringify(options.body) } : {}) });
+    const raw = await res.text();
+    if (!res.ok) {
+      if (res.status === 401) throw failure('登录已过期，请重新登录。', 401);
+      if (res.status === 403) throw failure('该 Beszel 账号没有访问这些数据的权限。', 403);
+      if (res.status === 429) throw failure('Hub 请求过于频繁，请稍后重试或延长刷新间隔。', 429);
+      throw failure(`Hub 返回 HTTP ${res.status}。`, res.status);
+    }
+    try { return JSON.parse(raw); } catch { throw failure('Hub 返回的数据格式不正确。'); }
+  } catch (e) {
+    if (e.status || e.message === 'Hub 返回的数据格式不正确。') throw e;
+    throw failure('无法连接 Beszel Hub。请检查 Tailscale 连接、访问规则和 Hub 状态。');
+  } finally { clearTimeout(timer); }
+}
+async function storeToken(next, generation) {
+  if (generation !== epoch) return;
+  token = next; tokenAt = Date.now();
+  const raw = JSON.stringify({ hub, token, at: tokenAt });
+  try {
+    const write = secretMutation.then(async () => { if (generation === epoch) await $metrix.setSecret('session', raw); });
+    secretMutation = write.catch(() => {});
+    await write;
+    if (generation === epoch) { secretRaw = raw; sessionWarning = ''; }
+  } catch {
+    if (generation === epoch) sessionWarning = '当前会话可用，但无法保存登录。重启后可能需要重新登录。';
+  }
+}
+function tokenExpiry() {
+  try { return Number(JSON.parse(atob(token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/'))).exp) * 1000 || 0; } catch { return 0; }
+}
+async function renew(force = false) {
+  if (!token) return;
+  const expiry = tokenExpiry();
+  if (!force && Date.now() - tokenAt < 6 * 3600e3 && (!expiry || expiry - Date.now() > 3600e3)) return;
+  if (renewing) return renewing;
+  const generation = epoch, origin = hub, credential = token;
+  const work = http('/api/collections/users/auth-refresh', { method: 'POST', hub: origin, token: credential }).then(async r => {
+    if (!r || typeof r.token !== 'string' || !r.token) throw failure('Hub 未返回有效的登录会话。');
+    await storeToken(r.token, generation);
+  }).finally(() => { if (renewing === work) renewing = null; });
+  renewing = work; return work;
+}
+async function list(name, params, generation = epoch) {
+  const rows = [], origin = hub, credential = token;
+  for (let p = 1; p <= 20; p++) {
+    const r = await http(collectionURL(name, { page: p, perPage: 200, ...params }), { hub: origin, token: credential });
+    if (generation !== epoch) return [];
+    if (!r || !Array.isArray(r.items)) throw failure('Beszel 返回了无法识别的数据列表。');
+    rows.push(...r.items);
+    if (!r.items.length || p >= (r.totalPages || 1)) return rows;
+  }
+  throw failure('数据量超过当前看板的单次读取范围，请缩小查询范围。');
+}
+const nodeTime = n => timeValue(n.updated);
+const stale = n => n.status === 'up' && nodeTime(n) > 0 && Date.now() - nodeTime(n) > 5 * 60e3;
+const online = n => n.status === 'up';
+const networkTotal = n => finite(n.info?.bb) ? n.info.bb : finite(n.info?.b) ? n.info.b * 1048576 : null;
+function network(stats) {
+  return { up: finite(stats?.b?.[0]) ? stats.b[0] : finite(stats?.ns) ? stats.ns * 1048576 : null,
+    down: finite(stats?.b?.[1]) ? stats.b[1] : finite(stats?.nr) ? stats.nr * 1048576 : null };
+}
+function summary() {
+  const active = systems.filter(online), bw = active.map(networkTotal).filter(finite);
+  const cpu = active.map(n => val(n.info?.cpu)).filter(finite);
+  return { online: active.length, total: systems.length, down: systems.filter(n => n.status === 'down').length,
+    paused: systems.filter(n => n.status === 'paused').length, pending: systems.filter(n => n.status === 'pending').length,
+    bandwidth: bw.length ? bw.reduce((a,b) => a+b, 0) : null, cpu: cpu.length ? cpu.reduce((a,b) => a+b, 0) / cpu.length : null };
+}
+async function loadOverview(generation) {
+  const result = await list('systems', { sort: 'name', fields: 'id,name,host,status,info,updated' }, generation);
+  if (generation !== epoch) return;
+  systems = result.filter(n => typeof n.id === 'string' && n.id); loaded = true; fetchedAt = Date.now();
+  if (selected && !systems.some(n => n.id === selected)) selected = '';
+  try {
+    const records = await list('system_stats', { sort: '-created', fields: 'system,stats,created',
+      filter: `type="1m" && created>"${pbTime(Date.now() - 5 * 60e3)}"` }, generation);
+    if (generation !== epoch) return;
+    const next = new Map();
+    for (const r of records) if (!next.has(r.system)) next.set(r.system, r);
+    latest = next;
+  } catch (e) { if (e.status === 401 || e.status === 403) throw e; }
+}
+async function loadDetail(id, selectedSpan = span) {
+  if (!token || !id) return;
+  const generation = epoch, key = `${id}:${selectedSpan}`, prev = detailCache.get(key);
+  const entry = { ...(prev || {}), loading: true, error: '', records: prev?.records || [], containers: prev?.containers || [] };
+  detailCache.set(key, entry); $metrix.invalidate();
+  const hours = selectedSpan === '24h' ? 24 : 1, type = selectedSpan === '24h' ? '20m' : '1m';
+  const safeId = JSON.stringify(id);
+  try {
+    const [history, containers] = await Promise.allSettled([
+      list('system_stats', { sort: 'created', fields: 'created,stats', filter: `system=${safeId} && type="${type}" && created>"${pbTime(Date.now() - hours * 3600e3)}"` }, generation),
+      http(collectionURL('container_stats', { page: 1, perPage: 1, sort: '-created', fields: 'created,stats', filter: `system=${safeId} && type="1m"` })),
+    ]);
+    if (generation !== epoch) return;
+    if (history.status === 'fulfilled') entry.records = history.value;
+    else entry.error = history.reason.message;
+    if (containers.status === 'fulfilled') {
+      const row = containers.value?.items?.[0];
+      entry.containers = Array.isArray(row?.stats) ? row.stats : []; entry.containerAt = timeValue(row?.created);
+      entry.containerError = '';
+    } else entry.containerError = containers.reason.message;
+    entry.at = Date.now();
+  } finally { if (generation === epoch) { entry.loading = false; $metrix.invalidate(); } }
+}
+async function run() {
+  if (!hub || !token) return;
+  if (inflight) return inflight;
+  const generation = epoch; busy = true; $metrix.invalidate();
+  const work = (async () => {
+    try {
+      await renew();
+      try { await loadOverview(generation); } catch (e) {
+        if (e.status !== 401) throw e;
+        await renew(true); await loadOverview(generation);
+      }
+      if (generation !== epoch) return;
+      error = ''; loginError = '';
+      if (selected) { const d = detailCache.get(`${selected}:${span}`); if (!d || Date.now() - (d.at || 0) >= 60e3) await loadDetail(selected); }
+    } catch (e) {
+      if (generation !== epoch) return;
+      error = e.message;
+      if (e.status === 401) { token = ''; loginError = '登录已过期，请重新登录。'; }
+    } finally { if (generation === epoch) { busy = false; if (inflight === work) inflight = null; $metrix.invalidate(); } }
+  })();
+  inflight = work; return work;
+}
+async function login() {
+  if (loginBusy || !hub) return;
+  if (!email.trim() || !password) { loginError = '请输入 Beszel 邮箱和密码。'; $metrix.invalidate(); return; }
+  loginBusy = true; loginError = ''; $metrix.invalidate();
+  const generation = epoch, origin = hub, credentials = { identity: email.trim(), password };
+  password = '';
+  try {
+    const r = await http('/api/collections/users/auth-with-password', { hub: origin, token: '', method: 'POST', body: credentials });
+    if (generation !== epoch) return;
+    if (!r || typeof r.token !== 'string' || !r.token) throw failure('Hub 未返回有效的登录会话。');
+    await storeToken(r.token, generation); error = ''; loginGeneration++;
+    await run();
+  } catch (e) { if (generation === epoch) { loginError = [400,401].includes(e.status) ? '邮箱或密码不正确，请重新输入。' : e.message; loginGeneration++; } }
+  finally { credentials.password = ''; if (generation === epoch) { loginBusy = false; $metrix.invalidate(); } }
+}
+async function logout() {
+  epoch++; token = ''; tokenAt = 0; password = ''; selected = '';
+  try { secretRaw = $metrix.secret('session'); } catch {}
+  systems = []; latest.clear(); detailCache.clear(); loaded = false; error = ''; fetchedAt = 0;
+  busy = false; loginBusy = false; loginError = ''; loginGeneration++; inflight = null; renewing = null; sessionWarning = '';
+  const generation = epoch;
+  try {
+    const deletion = secretMutation.then(async () => { if (generation === epoch) await $metrix.deleteSecret('session'); });
+    secretMutation = deletion.catch(() => {}); await deletion;
+  } catch { if (generation === epoch) sessionWarning = '无法清除保存的登录，请在看板设置中移除登录会话。'; }
+  $metrix.invalidate();
+}
+function chooseNode(id) {
+  selected = id; $metrix.invalidate();
+  const d = detailCache.get(`${id}:${span}`);
+  if (!d || Date.now() - (d.at || 0) > 60e3) return loadDetail(id);
+}
+const statusLabel = n => stale(n) ? '采样过期' : ({ up: '在线', down: '离线', paused: '已暂停', pending: '等待连接' }[n.status] || '未知状态');
+const statusColor = n => stale(n) ? 'warning' : ({ up: 'success', down: 'danger', paused: 'textMuted', pending: 'warning' }[n.status] || 'textMuted');
+function notice(message, color = 'warning') {
+  return h('Row', { tw: 'gap-2 p-3 rounded-lg bg-surfaceHover items-start w-full min-w-0' }, icon('alert', 14, color), text(message, `text-[12px] text-${color} grow min-w-0`, { wrap: true }));
+}
+function metric(label, value, amount) {
+  return h('Column', { tw: 'gap-1.5 grow basis-0 min-w-0' }, muted(label), text(value, 'font-semibold tabular-nums'),
+    h('Progress', { value: finite(amount) ? Math.max(0, Math.min(1, amount / 100)) : 0, height: 4, tw: `w-full text-${capacityColor(amount)} rounded-full` }));
+}
+function titleRow() {
+  const current = selected && systems.find(n => n.id === selected);
+  return h('Row', { tw: 'items-center gap-2 px-4 py-3 w-full min-w-0' },
+    current ? button('back', '返回主机列表', () => { selected = ''; $metrix.invalidate(); }) : icon('server', 19, 'accent'),
+    h('Column', { tw: 'gap-0.5 grow min-w-0' }, text(current?.name || 'Beszel', 'text-[15px] font-semibold truncate'), muted(current ? statusLabel(current) : '服务器状态')),
+    button('external', '打开 Beszel', () => { if (hub) $metrix.openURL(current ? `${hub}/system/${encodeURIComponent(current.id)}` : hub); }, !hub),
+    button('refresh', '刷新', () => run(), busy || !token),
+    token ? h('MenuButton', { label: '更多', menu: [{ label: '退出看板登录', onClick: logout }] }) : null);
+}
+function loginView() {
+  return h('Column', { tw: 'p-5 gap-4 w-full min-w-0' },
+    icon('shield', 32, 'accent'), text('连接你的 Beszel', 'text-[21px] font-semibold'),
+    text('使用 Beszel 邮箱和密码登录，查看 Tailscale 网络中的主机。', 'text-textMuted', { wrap: true }),
+    h('Field', { label: '邮箱' }, h('TextInput', { key: 'login-email', value: email, placeholder: 'Beszel 登录邮箱', onChange: v => { email = String(v); }, tw: 'w-full', onSubmit: login })),
+    h('Field', { label: '密码' }, h('TextInput', { key: `login-password-${loginGeneration}`, value: '', password: true, placeholder: 'Beszel 登录密码', tw: 'w-full',
+      // Never return the password in the tree: snapshots/exported source cannot expose it.
+      onChange: v => { password = String(v); }, onSubmit: login })),
+    loginError ? notice(loginError, 'danger') : null,
+    h('PrimaryButton', { key: 'login-submit', disabled: loginBusy || !hub, onClick: login, tw: 'w-full' }, loginBusy ? '正在登录…' : '登录并连接'),
+    muted('密码不保存；会话令牌保存在系统钥匙串并自动续期。', { wrap: true }),
+    muted(hub || '请先设置 Hub 地址', { wrap: true }));
+}
+function nodeCard(n) {
+  const info = n.info || {}, record = latest.get(n.id), rates = network(record?.stats), usable = online(n) && !stale(n);
+  return h('Column', { key: `node-${n.id}`, label: `查看 ${n.name}`, onClick: () => chooseNode(n.id),
+    tw: 'gap-3 p-3.5 rounded-xl border border-border w-full min-w-0 cursor-pointer hover:bg-surfaceHover' },
+    h('Row', { tw: 'items-center gap-2 w-full min-w-0' },
+      h('Box', { tw: `size-1.5 rounded-full bg-${statusColor(n)} shrink-0` }), text(n.name || n.id, 'font-semibold grow min-w-0 truncate'),
+      text(statusLabel(n), `text-[11px] text-${statusColor(n)}`)),
+    h('Row', { tw: `gap-4 w-full ${usable ? '' : 'opacity-50'}` }, metric('CPU', pct(info.cpu), info.cpu), metric('内存', pct(info.mp), info.mp), metric('磁盘', pct(info.dp), info.dp)),
+    h('Row', { tw: 'items-center gap-3 w-full min-w-0' },
+      muted(`↑ ${usable ? bytes(rates.up, true) : '—'}`, { fontFeatures: 'tnum' }),
+      muted(`↓ ${usable ? bytes(rates.down, true) : '—'}`, { fontFeatures: 'tnum' }),
+      h('Spacer'), muted(age(nodeTime(n)))),
+    !finite(rates.up) && usable ? muted(`总速率 ${bytes(networkTotal(n), true)}`) : null);
+}
+function tiles() {
+  const s = summary(), tile = (label, value, extra) => h('Column', { tw: 'gap-1 p-3 rounded-lg bg-surfaceHover min-w-0' }, muted(label), text(value, 'text-[21px] font-semibold tabular-nums'), muted(extra));
+  return h('Grid', { tw: 'grid-cols-3 gap-2 w-full' },
+    tile('在线主机', `${s.online}/${s.total}`, s.paused ? `${s.paused} 台已暂停` : '全部主机'),
+    tile('总带宽', bytes(s.bandwidth, true), '在线主机合计'),
+    tile('离线主机', String(s.down), s.pending ? `${s.pending} 台等待连接` : 'Hub 报告状态'));
+}
+function filteredNodes() {
+  const q = search.trim().toLowerCase();
+  return systems.filter(n => (filter === 'all' || (filter === 'up' ? online(n) : n.status === filter)) && (!q || `${n.name} ${n.host}`.toLowerCase().includes(q)))
+    .sort((a,b) => {
+      if (sort === 'cpu') return (b.info?.cpu || 0) - (a.info?.cpu || 0);
+      if (sort === 'memory') return (b.info?.mp || 0) - (a.info?.mp || 0);
+      if (sort === 'network') return (networkTotal(b) || 0) - (networkTotal(a) || 0);
+      if (sort === 'status') { const rank = { down: 0, pending: 1, up: 2, paused: 3 }; if (rank[a.status] !== rank[b.status]) return (rank[a.status] ?? 4) - (rank[b.status] ?? 4); }
+      return String(a.name).localeCompare(String(b.name));
+    });
+}
+function overview() {
+  const nodes = filteredNodes(), pages = Math.ceil(nodes.length / 15); page = Math.max(0, Math.min(page, Math.max(0, pages - 1)));
+  return h('Column', { tw: 'p-4 gap-3.5 w-full min-w-0' }, tiles(),
+    h('SearchField', { key: 'node-search', value: search, placeholder: '搜索名称或地址', tw: 'w-full', onChange: v => { search = String(v); page = 0; $metrix.invalidate(); } }),
+    h('Row', { tw: 'gap-2 items-center w-full' },
+      h('Select', { key: 'node-filter', value: filter, grow: 1, items: [{ label: '全部状态', value: 'all' },{ label: '在线', value: 'up' },{ label: '离线', value: 'down' },{ label: '已暂停', value: 'paused' },{ label: '等待连接', value: 'pending' }],
+        onChange: v => { filter = String(v); page = 0; $metrix.invalidate(); } }),
+      h('Select', { key: 'node-sort', value: sort, grow: 1, items: [{ label: '状态优先', value: 'status' },{ label: '名称', value: 'name' },{ label: 'CPU 最高', value: 'cpu' },{ label: '内存最高', value: 'memory' },{ label: '带宽最高', value: 'network' }],
+        onChange: v => { sort = String(v); localStorage.setItem('beszel.sort', sort); page = 0; $metrix.invalidate(); } })),
+    !loaded ? h('Column', { tw: 'gap-3' }, [0,1,2].map(i => h('Box', { key: `skeleton-${i}`, height: 138, tw: 'rounded-xl bg-surfaceHover w-full' }))) :
+      !systems.length ? notice('Beszel 没有返回可见的主机。请检查账号权限或先在 Hub 添加主机。', 'textMuted') :
+      !nodes.length ? muted('没有匹配的主机，请调整搜索或筛选。') : nodes.slice(page * 15, (page + 1) * 15).map(nodeCard),
+    pages > 1 ? h('Row', { tw: 'items-center gap-2 w-full' }, h('Button', { key: 'page-prev', disabled: page === 0, onClick: () => { page--; $metrix.invalidate(); } }, '上一页'), h('Spacer'), muted(`${page+1}/${pages} · ${nodes.length} 台`), h('Spacer'), h('Button', { key: 'page-next', disabled: page + 1 >= pages, onClick: () => { page++; $metrix.invalidate(); } }, '下一页')) : null);
+}
+function points(records, getter, formatter) {
+  const m = new Map();
+  for (const r of records || []) { const x = timeValue(r.created), y = getter(r.stats || {}); if (x && finite(y)) m.set(x, { x, y, valueLabel: formatter(y) }); }
+  return Array.from(m.values()).sort((a,b) => a.x-b.x).slice(-300);
+}
+function graph(key, title, series, percentage = false) {
+  const present = series.filter(s => s.points.length);
+  return h('Column', { key: `graph-${key}`, tw: 'gap-2 p-3 rounded-xl border border-border w-full min-w-0' },
+    text(title, 'font-semibold text-[12px]'), present.length ? h('Chart', { key: `chart-${key}`, type: 'area', xKind: 'time', height: 120, fillWidth: true,
+      series: present, ...(percentage ? { yDomain: [0,100] } : {}), curve: 'linear', hover: true, legend: present.length > 1, dots: false,
+      xTicks: 3, yTicks: 3, appear: false, strokeWidth: 1.7 }) : muted('此时间范围暂无采样数据。'));
+}
+function detailView(n) {
+  const entry = detailCache.get(`${n.id}:${span}`) || { records: [], containers: [], loading: true }, info = n.info || {}, recs = entry.records;
+  const series = (name, color, getter, formatter) => ({ name, color, points: points(recs, getter, formatter), fill: { from: 0.14, to: 0 } });
+  const containers = [...(entry.containers || [])].sort((a,b) => (b.c || 0) - (a.c || 0));
+  const last = recs.length ? recs[recs.length-1] : null, mem = last?.stats?.mem;
+  return h('Column', { tw: 'p-4 gap-3.5 w-full min-w-0' },
+    h('Column', { tw: 'gap-2 p-3 rounded-xl bg-surfaceHover w-full min-w-0' },
+      text(n.host || info.h || n.name, 'font-semibold truncate'),
+      h('Row', { tw: 'gap-3 w-full flex-wrap' }, muted(`运行 ${uptime(info.u)}`), muted(`采样 ${age(nodeTime(n))}`)),
+      finite(mem?.[0]) ? muted(`内存 ${bytes(mem[1])} / ${bytes(mem[0])}`) : null,
+      h('Row', { tw: 'gap-4 w-full' }, metric('CPU', pct(info.cpu), info.cpu), metric('内存', pct(info.mp), info.mp), metric('磁盘', pct(info.dp), info.dp))),
+    h('Row', { tw: 'items-center gap-2 w-full' }, text('资源趋势', 'font-semibold grow'),
+      h('Segmented', { key: 'detail-span', value: span, items: [{ label: '1 小时', value: '1h' },{ label: '24 小时', value: '24h' }], onChange: v => { span = v === '24h' ? '24h' : '1h'; $metrix.invalidate(); return loadDetail(n.id); } })),
+    entry.error ? notice(entry.error, 'danger') : null, entry.loading ? muted('正在更新历史数据…') : null,
+    graph('cpu', 'CPU 使用率', [series('CPU', 'accent', s => val(s.cpu), pct)], true),
+    graph('memory', '内存与磁盘', [series('内存', 'accent', s => val(s.mp), pct), series('磁盘', 'warning', s => val(s.dp), pct)], true),
+    graph('network', '上下行速率', [series('上传', 'accent', s => network(s).up, v => bytes(v,true)), series('下载', 'success', s => network(s).down, v => bytes(v,true))]),
+    h('Row', { tw: 'items-center gap-2 w-full' }, text('容器资源', 'font-semibold grow'), muted(entry.containerAt ? `采样 ${age(entry.containerAt)}` : '')),
+    entry.containerError ? notice(`容器数据暂不可用：${entry.containerError}`, 'warning') :
+      !containers.length ? muted(entry.loading ? '正在读取容器…' : '暂无容器采样；可能未启用容器监控。', { wrap: true }) :
+      containers.slice(0,12).map((c,i) => h('Column', { key: `container-${i}-${c.n}`, tw: 'gap-1 p-2.5 rounded-lg bg-surfaceHover w-full min-w-0' },
+        text(c.n || '未命名容器', 'text-[12px] font-semibold truncate'),
+        muted(`CPU ${pct(c.c)} · 内存 ${bytes(finite(c.m) ? c.m * 1048576 : null)}`, { fontFeatures: 'tnum' }))),
+    containers.length > 12 ? muted(`共 ${containers.length} 个容器，显示 CPU 最高的前 12 个。`) : null,
+    muted(span === '24h' ? '24 小时曲线使用 Beszel 的 20 分钟聚合采样。' : '1 小时曲线使用 Beszel 的每分钟采样。', { wrap: true }));
+}
+function panel() {
+  const n = selected && systems.find(x => x.id === selected);
+  return h('Column', { preferredWidth: 430, preferredHeight: 650, safeArea: true, tw: 'size-full min-h-0 min-w-0 text-text',
+    shortcuts: { 'CmdOrCtrl+R': () => run(), Escape: () => { if (selected) { selected = ''; $metrix.invalidate(); } } } },
+    titleRow(), h('Divider'),
+    h('Scroll', { tw: 'grow min-h-0 w-full' },
+      hubError ? h('Column', { tw: 'p-4' }, notice(hubError, 'danger')) : null,
+      token ? h('Column', { tw: 'w-full min-w-0' },
+        error ? h('Column', { tw: 'px-4 pt-3' }, notice(`${error}${fetchedAt ? ` 最后成功读取：${age(fetchedAt)}。` : ''}`, 'danger')) : null,
+        sessionWarning ? h('Column', { tw: 'px-4 pt-3' }, notice(sessionWarning)) : null,
+        n ? detailView(n) : overview()) : loginView()),
+    h('Divider'), h('Row', { tw: 'items-center gap-1.5 px-4 py-2 w-full min-w-0' }, icon('shield', 12, token && !error ? 'success' : 'textMuted'),
+      muted('Tailscale'), h('Spacer'), muted(token ? `${busy ? '更新中' : fetchedAt ? `读取 ${age(fetchedAt)}` : '等待数据'} · ${interval} 秒刷新` : '等待登录')));
+}
+function tray() {
+  const s = summary(); let title = 'Beszel';
+  if (loaded && token) {
+    const count = `${s.online}/${s.total}`;
+    title = trayFormat === 'online' ? count : trayFormat === 'cpu' ? `CPU ${pct(s.cpu)}` : trayFormat === 'bandwidth' ? bytes(s.bandwidth,true) : `${count} · ${bytes(s.bandwidth,true)}`;
+  }
+  return { title, icon: 'data:image/svg+xml,' + encodeURIComponent(icons.server), iconTemplate: true, error: error || hubError || '',
+    tooltip: token ? `Beszel · ${s.online}/${s.total} 在线 · ${s.down} 离线${fetchedAt ? ` · 最后读取 ${age(fetchedAt)}` : ''}` : 'Beszel · 请打开看板登录',
+    menu: [{ label: '刷新', onClick: () => run(), disabled: !token || busy },{ label: '打开 Beszel', onClick: () => { if (hub) $metrix.openURL(hub); }, disabled: !hub }] };
+}
+export default {
+  async scheduled(env) { sync(env); try { $metrix.schedule(interval * 1000); } catch {} await run(); },
+  render(env) { sync(env); return { tray: tray(), panel: panel() }; },
+  event(name, payload) {
+    if (name === 'open') return $metrix.panel.open();
+    if (name === 'refresh') return run();
+    if (name === 'system' && payload?.type === 'network.change' && payload.online && token) return run();
+    if (name === 'lifecycle' && payload?.type === 'expand' && token && Date.now() - fetchedAt > interval * 1000) return run();
+  },
+};
+  ]]></script>
+</bar>

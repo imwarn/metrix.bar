@@ -1,0 +1,13 @@
+# macOS
+.DS_Store
+
+# Dependencies & logs
+node_modules/
+*.log
+
+# Local secrets & temporary files
+.env
+.env.*
+*.secret
+*.secret.*
+tmp/
