@@ -24,7 +24,7 @@
 
 | 看板 ID | 路径 | 版本 | 协议 | 说明 |
 | --- | --- | --- | --- | --- |
-| `antigravity` | [`dashboards/antigravity/antigravity.bar`](dashboards/antigravity/antigravity.bar) | `1.1.0` | `AGPL-3.0-only` | 自动读取本机 `agy` 钥匙串登录态（兼容自定义认证 JSON 与 CC Switch 多账号），经 TLS 直连 `daily-cloudcode-pa` 展示模型配额、配额分组/双列卡片、倒计时、Notch 与桌面 Widget |
+| `antigravity` | [`dashboards/antigravity/antigravity.bar`](dashboards/antigravity/antigravity.bar) | `1.2.0` | `AGPL-3.0-only` | 自动读取本机 `agy` 钥匙串登录态，并发直连 `daily-cloudcode-pa` 展示 `5H` + `WEEKLY` 双额度分组卡片与新模型优先的双列网格、倒计时、Notch 与桌面 Widget |
 | `beszel` | [`dashboards/beszel/beszel.bar`](dashboards/beszel/beszel.bar) | `1.0.0` | `AGPL-3.0-only` | 通过 Tailscale 查看 Beszel 主机状态、1h/24h 资源趋势与容器用量 |
 
 ## 本地测试

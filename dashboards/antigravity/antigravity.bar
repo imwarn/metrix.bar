@@ -1,4 +1,4 @@
-<bar protocol-version="0" min-app-version="0.3.0" id="antigravity" title="Antigravity" version="1.1.0"
+<bar protocol-version="0" min-app-version="0.3.0" id="antigravity" title="Antigravity" version="1.2.0"
      category="ai" license="AGPL-3.0-only" homepage="https://github.com/imwarn/metrix.bar"
      description="Monitor Antigravity model quotas, reset countdowns, and local usage trends."
      refresh="5m" material="glass" placements="menubar" open-mode="flyout" window-style="standard"
@@ -219,9 +219,8 @@ async function refreshAccessToken(account) {
   if (!account.refreshToken || !clientId || !clientSecret) throw new Error(T.refreshNeedsClient);
   const body = new URLSearchParams({ grant_type: "refresh_token", refresh_token: account.refreshToken, client_id: clientId, client_secret: clientSecret });
   let res;
-  try {
-    res = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" }, body: body.toString() });
-  } catch { throw new Error(T.networkError); }
+  try { res = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" }, body: body.toString() }); }
+  catch { throw new Error(T.networkError); }
   const text = await res.text();
   if (!res.ok) throw new Error(fill(T.refreshFailed, { status: res.status }));
   let parsed;
@@ -232,48 +231,31 @@ async function refreshAccessToken(account) {
   return next.accessToken;
 }
 async function resolveAccessToken(account, forceRefresh = false) {
-  const now = Date.now(), margin = 60e3;
+  const now = Date.now(), margin = 60e3, cached = tokenCache.get(account.key);
   if (!forceRefresh) {
-    const cached = tokenCache.get(account.key);
     if (cached && cached.accessToken && (!finite(cached.expiresAt) || cached.expiresAt - now > margin)) return cached.accessToken;
     if (account.accessToken && (!finite(account.expiresAt) || account.expiresAt - now > margin)) return account.accessToken;
   }
-  if (account.refreshToken) {
-    try { return await refreshAccessToken(account); } catch (e) { if (!forceRefresh && account.accessToken) return account.accessToken; throw e; }
-  }
+  if (account.refreshToken) { try { return await refreshAccessToken(account); } catch (e) { if (!forceRefresh && account.accessToken) return account.accessToken; throw e; } }
   if (account.accessToken && !forceRefresh) return account.accessToken;
   throw new Error(T.refreshNeedsClient);
 }
 async function fetchUserEmail(accessToken, key) {
   if (emailCache.has(key)) return emailCache.get(key);
+  const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 3000);
   try {
-    const res = await fetch("https://openidconnect.googleapis.com/v1/userinfo", { headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" } });
+    const res = await fetch("https://openidconnect.googleapis.com/v1/userinfo", { signal: controller.signal, headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" } });
     if (!res.ok) return "";
-    const d = JSON.parse(await res.text()), mail = typeof d.email === "string" ? d.email.trim() : "";
+    const mail = String((JSON.parse(await res.text()) || {}).email || "").trim();
     if (mail) emailCache.set(key, mail);
     return mail;
-  } catch { return ""; }
+  } catch { return ""; } finally { clearTimeout(timer); }
 }
 
 // -- Cloud Code Assist TLS 传输与模型配额解析 --
-const targetOrigins = () => {
-  const pref = String(inputs.endpoint || "auto");
-  return pref === "prod" ? [ENDPOINTS.prod] : pref === "daily" ? [ENDPOINTS.daily] : [ENDPOINTS.daily, ENDPOINTS.prod];
-};
-function concatBytes(chunks) {
-  let total = 0, off = 0;
-  for (const c of chunks) total += c.length;
-  const out = new Uint8Array(total);
-  for (const c of chunks) { out.set(c, off); off += c.length; }
-  return out;
-}
-function findSequence(buf, seq, from = 0) {
-  outer: for (let i = from; i <= buf.length - seq.length; i++) {
-    for (let j = 0; j < seq.length; j++) if (buf[i + j] !== seq[j]) continue outer;
-    return i;
-  }
-  return -1;
-}
+const targetOrigins = () => { const p = String(inputs.endpoint || "auto"); return p === "prod" ? [ENDPOINTS.prod] : p === "daily" ? [ENDPOINTS.daily] : [ENDPOINTS.daily, ENDPOINTS.prod]; };
+function concatBytes(chunks) { let t = 0, o = 0; for (const c of chunks) t += c.length; const out = new Uint8Array(t); for (const c of chunks) { out.set(c, o); o += c.length; } return out; }
+function findSequence(buf, seq, from = 0) { outer: for (let i = from; i <= buf.length - seq.length; i++) { for (let j = 0; j < seq.length; j++) if (buf[i + j] !== seq[j]) continue outer; return i; } return -1; }
 function decodeChunkedBytes(buf) {
   const crlf = [13, 10], parts = [], dec = new TextDecoder();
   let pos = 0, complete = false;
@@ -285,49 +267,36 @@ function decodeChunkedBytes(buf) {
     if (size === 0) { if (findSequence(buf, crlf, end + 2) >= 0) complete = true; break; }
     pos = end + 2;
     if (pos + size + 2 > buf.length) break;
-    parts.push(buf.subarray(pos, pos + size));
-    pos += size + 2;
+    parts.push(buf.subarray(pos, pos + size)); pos += size + 2;
   }
   return { bytes: concatBytes(parts), complete };
 }
 function parseHttpBytes(raw) {
   const sep = findSequence(raw, [13, 10, 13, 10]), dec = new TextDecoder();
   if (sep < 0) throw new Error(T.invalidResp);
-  const lines = dec.decode(raw.subarray(0, sep)).split("\r\n"), statusMatch = /^HTTP\/\d(?:\.\d)?\s+(\d{3})/.exec(lines[0] || "");
-  if (!statusMatch) throw new Error(T.invalidResp);
+  const lines = dec.decode(raw.subarray(0, sep)).split("\r\n"), m = /^HTTP\/\d(?:\.\d)?\s+(\d{3})/.exec(lines[0] || "");
+  if (!m) throw new Error(T.invalidResp);
   const headers = {};
   for (let i = 1; i < lines.length; i++) { const idx = lines[i].indexOf(":"); if (idx > 0) headers[lines[i].slice(0, idx).trim().toLowerCase()] = lines[i].slice(idx + 1).trim(); }
   let bodyBytes = raw.subarray(sep + 4), complete = false;
-  if ((headers["transfer-encoding"] || "").toLowerCase().includes("chunked")) {
-    ({ bytes: bodyBytes, complete } = decodeChunkedBytes(bodyBytes));
-  } else if (headers["content-length"] !== undefined) {
-    const cl = Number(headers["content-length"]);
-    if (Number.isFinite(cl) && bodyBytes.length >= cl) { bodyBytes = bodyBytes.subarray(0, cl); complete = true; }
-  }
-  return { status: Number(statusMatch[1]), text: dec.decode(bodyBytes), complete };
+  if ((headers["transfer-encoding"] || "").toLowerCase().includes("chunked")) ({ bytes: bodyBytes, complete } = decodeChunkedBytes(bodyBytes));
+  else if (headers["content-length"] !== undefined) { const cl = Number(headers["content-length"]); if (Number.isFinite(cl) && bodyBytes.length >= cl) { bodyBytes = bodyBytes.subarray(0, cl); complete = true; } }
+  return { status: Number(m[1]), text: dec.decode(bodyBytes), complete };
 }
 
 let socketsConnect = undefined;
 async function postViaTlsSocket(origin, method, accessToken, payload) {
   if (socketsConnect === undefined) {
     socketsConnect = null;
-    try {
-      if (typeof $metrix.caniuse === "function" && (await $metrix.caniuse("sockets"))) {
-        const mod = await import("cloudflare:sockets");
-        if (mod && typeof mod.connect === "function") socketsConnect = mod.connect;
-      }
-    } catch {}
+    try { if (typeof $metrix.caniuse === "function" && (await $metrix.caniuse("sockets"))) { const mod = await import("cloudflare:sockets"); if (mod && typeof mod.connect === "function") socketsConnect = mod.connect; } } catch {}
   }
   if (!socketsConnect) return null;
   const hostname = new URL(origin).hostname, enc = new TextEncoder(), bodyBytes = enc.encode(JSON.stringify(payload || {}));
   const reqHead = `POST /v1internal:${method} HTTP/1.1\r\nHost: ${hostname}\r\nAuthorization: Bearer ${accessToken}\r\nUser-Agent: ${AGY_USER_AGENT}\r\nContent-Type: application/json\r\nAccept: application/json\r\nAccept-Encoding: identity\r\nContent-Length: ${bodyBytes.length}\r\nConnection: close\r\n\r\n`;
-  const sock = socketsConnect({ hostname, port: 443 }, { secureTransport: "on" });
-  const timer = setTimeout(() => { try { sock.close(); } catch {} }, 12000);
+  const sock = socketsConnect({ hostname, port: 443 }, { secureTransport: "on" }), timer = setTimeout(() => { try { sock.close(); } catch {} }, 6000);
   try {
     await sock.opened;
-    const writer = sock.writable.getWriter();
-    await writer.write(concatBytes([enc.encode(reqHead), bodyBytes]));
-    writer.releaseLock();
+    const writer = sock.writable.getWriter(); await writer.write(concatBytes([enc.encode(reqHead), bodyBytes])); writer.releaseLock();
     const reader = sock.readable.getReader(), chunks = [];
     let total = 0;
     while (true) {
@@ -351,13 +320,9 @@ async function postCloudCode(origin, method, accessToken, payload) {
     const tlsRes = await postViaTlsSocket(origin, method, accessToken, payload);
     if (tlsRes) { status = tlsRes.status; text = tlsRes.text; }
     else {
-      const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 12000);
+      const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 6000);
       try {
-        const res = await fetch(`${origin}/v1internal:${method}`, {
-          method: "POST", signal: controller.signal,
-          headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify(payload || {}),
-        });
+        const res = await fetch(`${origin}/v1internal:${method}`, { method: "POST", signal: controller.signal, headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify(payload || {}) });
         status = res.status; text = await res.text();
       } finally { clearTimeout(timer); }
     }
@@ -379,45 +344,92 @@ async function postCloudCode(origin, method, accessToken, payload) {
 
 const inferFamily = (id, name) => {
   const s = `${id} ${name}`.toLowerCase();
-  return /claude|opus|sonnet|haiku|^3p-/.test(s) ? "claude" : /gpt|openai|\bo1\b|\bo3\b|\bo4\b/.test(s) ? "gpt" : /gemini|argon|carbon|hydrogen|neon/.test(s) ? "gemini" : "other";
+  return /claude|opus|sonnet|haiku|^3p-|\b3p\b|third/.test(s) ? "claude" : /gpt|openai|\bo1\b|\bo3\b|\bo4\b/.test(s) ? "gpt" : /gemini|argon|carbon|hydrogen|neon/.test(s) ? "gemini" : "other";
 };
-const familyLabel = f => ({ gemini: "Gemini", claude: "Claude & GPT", gpt: "GPT", other: "Models" })[f] || "Models";
+const familyLabel = f => ({ gemini: "Gemini Models", claude: "Claude & GPT", gpt: "GPT", other: "Models" })[f] || "Models";
 const prettifyModelId = id => String(id).split(/[-_]+/).filter(Boolean).map(w => (/^xhigh$/i.test(w) ? "XHigh" : w.charAt(0).toUpperCase() + w.slice(1))).join(" ");
-const sortModels = list => list.sort((a, b) => a.leftPct - b.leftPct || (a.resetMs || Infinity) - (b.resetMs || Infinity) || a.displayName.localeCompare(b.displayName));
-const BUCKET_NAMES = { "gemini-5h": "Gemini · 5h", "gemini-weekly": "Gemini · Weekly", "gemini-argon-wtu-weekly": "Gemini 4 Argon · Weekly", "3p-5h": "Claude & GPT · 5h", "3p-weekly": "Claude & GPT · Weekly" };
+const shortGroupName = name => String(name || "").replace(/\s+models?$/i, "").replace(/\band\b/i, "&").trim() || "Quota";
+
+function extractModelVersion(id, displayName) {
+  const s = `${displayName} ${id}`.toLowerCase();
+  const m = /(?:gemini|claude|opus|sonnet|haiku|gpt)[^0-9]{0,14}(\d+)(?:[._-](\d+))?(?!\d*[bk]\b)/.exec(s);
+  if (m) return Number(m[1]) * 100 + (m[2] ? Number(m[2]) : 0);
+  const g = /(?:^|[\s_-])v?(\d+)(?:\.(\d+))?(?=$|[\s_-])/.exec(s);
+  return g && Number(g[1]) < 30 ? Number(g[1]) * 100 + (g[2] ? Number(g[2]) : 0) : 0;
+}
+const extractTierScore = s => (/argon|ultra|opus/.test(s) ? 4 : /carbon|pro|sonnet/.test(s) ? 3 : /hydrogen|neon|flash/.test(s) ? 2 : /lite|haiku|mini/.test(s) ? 1 : 0);
+const extractEffortScore = s => (/\bxhigh\b|\bmax\b/.test(s) ? 4 : /\bhigh\b/.test(s) ? 3 : /\bmedium\b/.test(s) ? 2 : /\blow\b/.test(s) ? 1 : 0);
+const compareModelsNewestFirst = (a, b) =>
+  (a.isUtility - b.isUtility) || (a.pickerRank - b.pickerRank) || (b.recommended - a.recommended) ||
+  (b.versionScore - a.versionScore) || (b.tierScore - a.tierScore) || (b.effortScore - a.effortScore) || a.displayName.localeCompare(b.displayName);
 
 function parseQuotaModels(raw) {
   if (!raw || typeof raw !== "object") throw new Error(T.invalidResp);
-  const entries = [];
-  if (Array.isArray(raw.models)) { for (const m of raw.models) if (m && typeof m === "object") { const id = String(m.id || m.model || m.name || "").trim(); if (id) entries.push([id, m]); } }
-  else if (raw.models && typeof raw.models === "object") { for (const [id, m] of Object.entries(raw.models)) if (m && typeof m === "object") entries.push([id, m]); }
-  else return [];
+  const pickerRank = new Map();
+  if (typeof raw.defaultAgentModelId === "string" && raw.defaultAgentModelId) pickerRank.set(raw.defaultAgentModelId, -1);
+  if (Array.isArray(raw.agentModelSorts)) {
+    let idx = 0;
+    for (const s of raw.agentModelSorts) {
+      const ids = Array.isArray(s && s.groups) ? s.groups.flatMap(g => (Array.isArray(g && g.modelIds) ? g.modelIds : [])) : Array.isArray(s && s.modelIds) ? s.modelIds : [];
+      for (const id of ids) if (typeof id === "string" && !pickerRank.has(id)) pickerRank.set(id, idx++);
+    }
+  }
+  const entries = Array.isArray(raw.models)
+    ? raw.models.filter(m => m && typeof m === "object").map(m => [String(m.id || m.model || m.name || "").trim(), m]).filter(([id]) => id)
+    : raw.models && typeof raw.models === "object" ? Object.entries(raw.models).filter(([, m]) => m && typeof m === "object") : [];
   const out = [];
   for (const [id, m] of entries) {
     if (m.isInternal === true && !m.displayName) continue;
     const q = m.quotaInfo || m.quota_info;
     if (!q || typeof q !== "object") continue;
-    let remaining = finite(q.remainingFraction) ? q.remainingFraction * 100 : finite(q.remaining_fraction) ? q.remaining_fraction * 100 : finite(q.remainingPercentage) ? q.remainingPercentage : finite(q.remaining_percentage) ? q.remaining_percentage : NaN;
     const resetMs = parseTimestamp(q.resetTime ?? q.reset_time);
-    if (!finite(remaining) && finite(resetMs)) remaining = 0;
+    let remaining = finite(q.remainingFraction) ? q.remainingFraction * 100 : finite(q.remaining_fraction) ? q.remaining_fraction * 100 : finite(q.remainingPercentage) ? q.remainingPercentage : finite(q.remaining_percentage) ? q.remaining_percentage : finite(resetMs) ? 0 : NaN;
     if (!finite(remaining)) continue;
-    const displayName = String(m.displayName || m.display_name || "").trim() || prettifyModelId(id), family = inferFamily(id, displayName);
-    out.push({ id, displayName, family, isPrimary: family === "gemini" && /argon|pro|flash/i.test(`${id} ${displayName}`), leftPct: Math.max(0, Math.min(100, remaining)), resetMs });
+    const displayName = String(m.displayName || m.display_name || "").trim() || prettifyModelId(id), family = inferFamily(id, displayName), low = `${id} ${displayName}`.toLowerCase();
+    out.push({
+      id, displayName, family, isPrimary: family === "gemini" && /argon|pro|flash/i.test(low), leftPct: Math.max(0, Math.min(100, remaining)), resetMs,
+      isUtility: (m.isInternal === true || /^tab_|^chat_|autocomplete|jump_/i.test(id)) ? 1 : 0,
+      recommended: (m.recommended === true || m.isRecommended === true || /\bnew\b|\blatest\b/i.test(String(m.tagTitle || ""))) ? 1 : 0,
+      pickerRank: pickerRank.has(id) ? pickerRank.get(id) : Infinity,
+      versionScore: extractModelVersion(id, displayName), tierScore: extractTierScore(low), effortScore: extractEffortScore(low),
+    });
   }
-  return sortModels(out);
+  return out.sort(compareModelsNewestFirst);
 }
-function parseQuotaSummaryBuckets(raw) {
+
+function parseQuotaSummaryGroups(raw, allModels) {
   if (!raw || !Array.isArray(raw.groups)) return [];
-  const out = [];
-  for (const grp of raw.groups) for (const b of (grp && Array.isArray(grp.buckets) ? grp.buckets : [])) {
-    const id = String((b && (b.bucketId || b.id)) || "").trim();
-    if (!id) continue;
-    const resetMs = parseTimestamp(b.resetTime), remaining = finite(b.remainingFraction) ? b.remainingFraction * 100 : finite(resetMs) ? 0 : NaN;
-    if (!finite(remaining)) continue;
-    const displayName = BUCKET_NAMES[id] || (grp.displayName ? `${grp.displayName} (${id})` : prettifyModelId(id)), family = inferFamily(id, displayName);
-    out.push({ id, displayName, family, isPrimary: family === "gemini", leftPct: Math.max(0, Math.min(100, remaining)), resetMs });
+  const groups = [];
+  for (let i = 0; i < raw.groups.length; i++) {
+    const grp = raw.groups[i];
+    if (!grp || typeof grp !== "object") continue;
+    const rawBuckets = Array.isArray(grp.buckets) ? grp.buckets : [], title = String(grp.displayName || grp.name || "").trim() || `Group #${i + 1}`;
+    const shortTitle = shortGroupName(title), family = inferFamily(rawBuckets.map(b => (b && (b.bucketId || b.id)) || "").join(" "), title), buckets = [];
+    for (const b of rawBuckets) {
+      const id = String((b && (b.bucketId || b.id)) || "").trim();
+      if (!id) continue;
+      const resetMs = parseTimestamp(b.resetTime ?? b.reset_time);
+      const remaining = finite(b.remainingFraction) ? b.remainingFraction * 100 : finite(b.remaining_fraction) ? b.remaining_fraction * 100 : finite(resetMs) ? 0 : NaN;
+      if (!finite(remaining)) continue;
+      const win = String(b.window || "").trim().toLowerCase(), isArgon = /argon/i.test(id);
+      const is5h = win === "5h" || /(?:^|[-_])5h(?:$|[-_])/i.test(id), isWeekly = win === "weekly" || /weekly|7d/i.test(id);
+      const label = isArgon && isWeekly ? "ARGON WEEKLY" : is5h ? "5H" : isWeekly ? "WEEKLY" : String(b.displayName || prettifyModelId(id)).toUpperCase();
+      const windowRank = is5h ? 0 : isWeekly && !isArgon ? 1 : isArgon ? 2 : 3;
+      buckets.push({ id, key: id, label, title: `${shortTitle} · ${label}`, groupTitle: title, seriesKey: `bucket:${id}`, family, windowRank, leftPct: Math.max(0, Math.min(100, remaining)), resetMs });
+    }
+    if (!buckets.length) continue;
+    buckets.sort((a, b) => a.windowRank - b.windowRank || a.label.localeCompare(b.label));
+    const explicit = Array.isArray(grp.modelIds) ? grp.modelIds : Array.isArray(grp.models) ? grp.models : null;
+    let matched = [];
+    if (explicit && explicit.length) {
+      const keys = new Set(explicit.map(x => String(typeof x === "string" ? x : (x && (x.id || x.model || x.displayName)) || "").toLowerCase()).filter(Boolean));
+      matched = allModels.filter(m => keys.has(m.id.toLowerCase()) || keys.has(m.displayName.toLowerCase()));
+    }
+    if (!matched.length) matched = family === "gemini" ? allModels.filter(m => m.family === "gemini" && !m.isUtility) : (family === "claude" || family === "gpt") ? allModels.filter(m => (m.family === "claude" || m.family === "gpt") && !m.isUtility) : [];
+    const resetMs = buckets.reduce((min, b) => (finite(b.resetMs) && b.resetMs < min ? b.resetMs : min), Infinity);
+    groups.push({ key: `sum-${i}-${family}`, title, family, buckets, models: matched, leftPct: Math.min(...buckets.map(b => b.leftPct)), resetMs: Number.isFinite(resetMs) ? resetMs : NaN });
   }
-  return sortModels(out);
+  return groups;
 }
 function commonTitlePrefix(names) {
   if (!names.length) return "";
@@ -435,10 +447,13 @@ function buildGroups(models) {
   }
   for (const g of groups) {
     g.title = g.models.length === 1 ? g.models[0].displayName : (commonTitlePrefix(g.models.map(m => m.displayName)) || familyLabel(g.family));
-    g.seriesKey = `${g.family}:${g.title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+    const seriesKey = `${g.family}:${g.title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+    const label = finite(g.resetMs) && g.resetMs - Date.now() > 24 * 3600e3 ? "WEEKLY" : finite(g.resetMs) ? "5H" : T.remaining.toUpperCase();
+    g.buckets = [{ id: g.key, key: g.key, label, title: g.title, groupTitle: g.title, seriesKey, family: g.family, windowRank: 0, leftPct: g.leftPct, resetMs: g.resetMs }];
   }
   return groups.sort((a, b) => a.leftPct - b.leftPct || (a.resetMs || Infinity) - (b.resetMs || Infinity) || a.title.localeCompare(b.title));
 }
+const flattenBuckets = groups => groups.flatMap(g => g.buckets || []).sort((a, b) => a.leftPct - b.leftPct || (a.resetMs || Infinity) - (b.resetMs || Infinity) || a.windowRank - b.windowRank);
 function parseIneligibleReason(resp) {
   if (!resp || typeof resp !== "object") return "";
   const allowed = Array.isArray(resp.allowedTiers) ? resp.allowedTiers : [], ineligible = Array.isArray(resp.ineligibleTiers) ? resp.ineligibleTiers : [];
@@ -480,48 +495,45 @@ async function openDatabase() {
   } catch {}
   return db || null;
 }
-async function recordSamples(accountKey, groups) {
+async function recordSamples(accountKey, buckets) {
   const conn = await openDatabase();
-  if (!conn || !groups.length) return;
+  if (!conn || !buckets.length) return;
   const now = Date.now();
   try {
-    for (const g of groups) {
-      const resetCycle = finite(g.resetMs) ? Math.round(g.resetMs) : 0;
-      const last = await conn.prepare("SELECT cycle, left_pct FROM samples WHERE acct = ? AND bucket = ? ORDER BY ts DESC LIMIT 1").bind(accountKey, g.seriesKey).first();
+    for (const b of buckets) {
+      const resetCycle = finite(b.resetMs) ? Math.round(b.resetMs) : 0;
+      const last = await conn.prepare("SELECT cycle, left_pct FROM samples WHERE acct = ? AND bucket = ? ORDER BY ts DESC LIMIT 1").bind(accountKey, b.seriesKey).first();
       const cycle = last && resetCycle && Math.abs(last.cycle - resetCycle) <= CYCLE_SLACK ? last.cycle : resetCycle;
-      if (!last || last.cycle !== cycle || Math.abs(last.left_pct - g.leftPct) >= 0.5) {
-        await conn.prepare("INSERT OR REPLACE INTO samples (acct, bucket, cycle, ts, left_pct) VALUES (?, ?, ?, ?, ?)").bind(accountKey, g.seriesKey, cycle, now, g.leftPct).run();
-      }
-      const rows = await conn.prepare("SELECT ts, left_pct FROM samples WHERE acct = ? AND bucket = ? AND cycle = ? ORDER BY ts").bind(accountKey, g.seriesKey, cycle).all();
-      trends[g.seriesKey] = (rows && rows.results) || [];
+      if (!last || last.cycle !== cycle || Math.abs(last.left_pct - b.leftPct) >= 0.5) await conn.prepare("INSERT OR REPLACE INTO samples (acct, bucket, cycle, ts, left_pct) VALUES (?, ?, ?, ?, ?)").bind(accountKey, b.seriesKey, cycle, now, b.leftPct).run();
+      const rows = await conn.prepare("SELECT ts, left_pct FROM samples WHERE acct = ? AND bucket = ? AND cycle = ? ORDER BY ts").bind(accountKey, b.seriesKey, cycle).all();
+      trends[b.seriesKey] = (rows && rows.results) || [];
     }
     await conn.prepare("DELETE FROM samples WHERE ts < ?").bind(now - KEEP_MS).run();
   } catch {}
 }
 
 // -- Worker 状态与刷新管线 --
-let inputs = {}, accounts = [], activeIdx = null, lastConfiguredIdx = null;
-let snapshot = null, error = "", inflight = null, viewMode = "grouped", search = "", selectedId = "";
-let expandedGroups = new Set(), activity;
+let inputs = {}, accounts = [], activeIdx = null, lastConfiguredIdx = null, snapshot = null, error = "", inflight = null, viewMode = "grouped", search = "", selectedId = "", expandedGroups = new Set(), activity;
 const alertedCycles = {};
 try {
-  const savedView = localStorage.getItem("antigravity.viewMode");
-  if (savedView === "grid" || savedView === "grouped") viewMode = savedView;
-  const savedRaw = localStorage.getItem("antigravity.accountIdx");
-  if (savedRaw !== null && savedRaw !== "") { const n = Number(savedRaw); if (Number.isInteger(n) && n >= 0) activeIdx = n; }
+  const sv = localStorage.getItem("antigravity.viewMode"), sr = localStorage.getItem("antigravity.accountIdx");
+  if (sv === "grid" || sv === "grouped") viewMode = sv;
+  if (sr !== null && sr !== "") { const n = Number(sr); if (Number.isInteger(n) && n >= 0) activeIdx = n; }
 } catch {}
 
-function updateNotchActivity(groups) {
+function updateNotchActivity(buckets) {
   if (activity && activity.expiresAt <= Date.now()) activity = undefined;
-  if (inputs.notchActivity === false || !groups.length || groups[0].leftPct > LOW_QUOTA_THRESHOLD) return;
-  const urgent = groups[0], cycle = finite(urgent.resetMs) ? Math.round(urgent.resetMs / 60e3) : 0;
+  if (inputs.notchActivity === false || !buckets.length || buckets[0].leftPct > LOW_QUOTA_THRESHOLD) return;
+  const urgent = buckets[0], cycle = finite(urgent.resetMs) ? Math.round(urgent.resetMs / 60e3) : 0;
   if (alertedCycles[urgent.seriesKey] === cycle) return;
   alertedCycles[urgent.seriesKey] = cycle;
   activity = { id: `${urgent.seriesKey}:${cycle}:${clampPct(urgent.leftPct)}`, expiresAt: Date.now() + 8000 };
 }
 async function fetchAccountSnapshot(account) {
   let lastErr = null;
+  const deadline = Date.now() + 11500;
   for (const origin of targetOrigins()) {
+    if (lastErr && Date.now() > deadline - 3500) break;
     let token = await resolveAccessToken(account, false);
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
@@ -530,23 +542,20 @@ async function fetchAccountSnapshot(account) {
           const assist = await postCloudCode(origin, "loadCodeAssist", token, { metadata: { ideType: "ANTIGRAVITY" }, ...(projectId ? { cloudaicompanionProject: projectId } : {}) });
           const ineligible = parseIneligibleReason(assist);
           if (ineligible) throw Object.assign(new Error(ineligible), { status: 403 });
-          if (!projectId && assist && assist.cloudaicompanionProject) {
-            const p = assist.cloudaicompanionProject;
-            projectId = typeof p === "string" ? p.trim() : String((p && (p.id || p.projectId)) || "").trim();
-          }
+          if (!projectId && assist && assist.cloudaicompanionProject) { const p = assist.cloudaicompanionProject; projectId = typeof p === "string" ? p.trim() : String((p && (p.id || p.projectId)) || "").trim(); }
           plan = parseTier(assist);
         } catch (e) { if (e && (e.status === 401 || e.status === 403)) throw e; }
         const reqBody = projectId ? { project: projectId } : {};
-        let models = [];
-        try { models = parseQuotaModels(await postCloudCode(origin, "fetchAvailableModels", token, reqBody)); }
-        catch (e) { if (e && (e.status === 401 || e.status === 429)) throw e; lastErr = e; }
-        if (!models.length) {
-          try { models = parseQuotaSummaryBuckets(await postCloudCode(origin, "retrieveUserQuotaSummary", token, reqBody)); }
-          catch (e) { if (!lastErr) lastErr = e; if (e && (e.status === 401 || e.status === 403 || e.status === 429)) throw e; }
-        }
-        if (!models.length && lastErr) throw lastErr;
+        const [modelsRes, summaryRes] = await Promise.allSettled([postCloudCode(origin, "fetchAvailableModels", token, reqBody), postCloudCode(origin, "retrieveUserQuotaSummary", token, reqBody)]);
+        const reqErrs = [modelsRes, summaryRes].filter(r => r.status === "rejected").map(r => r.reason), fatal = reqErrs.find(e => e && (e.status === 401 || e.status === 429));
+        if (fatal) throw fatal;
+        let models = modelsRes.status === "fulfilled" ? parseQuotaModels(modelsRes.value) : [];
+        let groups = summaryRes.status === "fulfilled" ? parseQuotaSummaryGroups(summaryRes.value, models) : [];
+        if (!groups.length && models.length) groups = buildGroups(models);
+        if (!models.length && groups.length) models = groups.flatMap(g => g.buckets.map(b => ({ id: b.id, displayName: b.title, family: b.family, isPrimary: b.family === "gemini", leftPct: b.leftPct, resetMs: b.resetMs, isUtility: 0, recommended: 0, pickerRank: Infinity, versionScore: 0, tierScore: 0, effortScore: 0 })));
+        if (!models.length && !groups.length) throw reqErrs[0] || lastErr || new Error(T.networkError);
         const email = account.email || (await fetchUserEmail(token, account.key));
-        return { accountKey: account.key, accountLabel: email || account.label, plan, origin, models, groups: buildGroups(models), fetchedAt: Date.now() };
+        return { accountKey: account.key, accountLabel: email || account.label, plan, origin, models, groups, buckets: flattenBuckets(groups), fetchedAt: Date.now() };
       } catch (e) {
         if (e && e.status === 401 && attempt === 0 && account.refreshToken) { token = await resolveAccessToken(account, true); continue; }
         lastErr = e;
@@ -560,33 +569,25 @@ async function fetchAccountSnapshot(account) {
 async function load() {
   const parsed = await readAuthAccounts();
   accounts = parsed.accounts;
-  const rawIdx = inputs.accountIndex;
-  const configuredIdx = rawIdx !== undefined && rawIdx !== null && rawIdx !== "" && Number.isInteger(Number(rawIdx)) ? Number(rawIdx) : null;
+  const rawIdx = inputs.accountIndex, configuredIdx = rawIdx !== undefined && rawIdx !== null && rawIdx !== "" && Number.isInteger(Number(rawIdx)) ? Number(rawIdx) : null;
   if (configuredIdx !== null && configuredIdx !== lastConfiguredIdx) { lastConfiguredIdx = configuredIdx; if (activeIdx === null || configuredIdx !== 0) activeIdx = configuredIdx; }
-  if (activeIdx === null || activeIdx < 0 || activeIdx >= accounts.length) {
-    activeIdx = Math.max(0, Math.min(accounts.length - 1, configuredIdx && configuredIdx > 0 ? configuredIdx : parsed.defaultIdx));
-  }
+  if (activeIdx === null || activeIdx < 0 || activeIdx >= accounts.length) activeIdx = Math.max(0, Math.min(accounts.length - 1, configuredIdx && configuredIdx > 0 ? configuredIdx : parsed.defaultIdx));
   const next = await fetchAccountSnapshot(accounts[activeIdx] || accounts[0]);
-  snapshot = next;
-  await recordSamples(next.accountKey, next.groups);
-  updateNotchActivity(next.groups);
+  snapshot = next; await recordSamples(next.accountKey, next.buckets); updateNotchActivity(next.buckets);
 }
 function refresh() {
   if (inflight) return inflight;
   inflight = load().then(() => { error = ""; }).catch(e => { error = String((e && e.message) || e); }).finally(() => { inflight = null; $metrix.invalidate(); });
-  $metrix.invalidate();
-  return inflight;
+  $metrix.invalidate(); return inflight;
 }
 const launchRefresh = () => { void refresh(); };
 async function copyText(str) {
   try {
-    if (typeof navigator !== "undefined" && navigator.clipboard && typeof ClipboardItem === "function") {
-      await navigator.clipboard.write([new ClipboardItem({ "text/plain": new Blob([str], { type: "text/plain" }) })]);
-    }
+    if (typeof navigator !== "undefined" && navigator.clipboard && typeof ClipboardItem === "function") await navigator.clipboard.write([new ClipboardItem({ "text/plain": new Blob([str], { type: "text/plain" }) })]);
     if (typeof $metrix.toast === "function") $metrix.toast(fill(T.copied, { text: str }));
   } catch {}
 }
-const buildSummaryText = () => (snapshot && snapshot.groups.length ? snapshot.groups.map(g => `${g.title}: ${pctText(g.leftPct)} (${formatCountdown(g.resetMs)})`).join(" | ") : TITLE);
+const buildSummaryText = () => (snapshot && snapshot.groups.length ? snapshot.groups.map(g => `${g.title}: ${g.buckets.map(b => `${b.label} ${pctText(b.leftPct)} (${formatCountdown(b.resetMs)})`).join(" / ")}`).join(" | ") : TITLE);
 
 // -- 原生面板组件 --
 const IconButton = (name, label, onClick, busy = false) => h("Column", {
@@ -606,8 +607,8 @@ function Header() {
     IconButton("copy", T.copySummary, () => copyText(buildSummaryText())),
     IconButton("refresh", T.refresh, launchRefresh, inflight !== null));
 }
-function SummaryStrip(models, groups) {
-  const lowest = groups[0], soonest = models.filter(m => finite(m.resetMs)).sort((a, b) => a.resetMs - b.resetMs)[0];
+function SummaryStrip(models, buckets) {
+  const lowest = buckets[0], soonest = [...buckets, ...models].filter(m => finite(m.resetMs)).sort((a, b) => a.resetMs - b.resetMs)[0];
   const tile = (label, value, color = "text") => h("Column", { gap: 2, padding: [8, 10], radius: 8, background: K.hover, minWidth: 0 },
     TX(label, { fontSize: 11, textColor: K.muted, singleLine: true }),
     TX(value, { fontSize: 16, fontWeight: 650, textColor: color, fontFeatures: "tnum", singleLine: true }));
@@ -636,40 +637,42 @@ function ModelCard(m) {
       TX(m.id, { fontSize: 11, font: "monospace", textColor: "accent", background: "accentSubtle", radius: 4, padding: [2, 6], singleLine: true, shrink: 1, minWidth: 0 })),
     QuotaBar(m.leftPct),
     h("Row", { gap: 5, alignItems: "center", fillWidth: true, minWidth: 0 },
-      Icon("clock", 11, K.muted),
-      TX(formatResetStamp(m.resetMs), { fontSize: 10, textColor: K.muted, fontFeatures: "tnum", singleLine: true, shrink: 1, minWidth: 0 }),
-      h("Spacer"),
-      TX(formatCountdown(m.resetMs), { fontSize: 11, fontWeight: 500, textColor: K.muted, fontFeatures: "tnum", shrink: 0 })));
+      Icon("clock", 11, K.muted), TX(formatResetStamp(m.resetMs), { fontSize: 10, textColor: K.muted, fontFeatures: "tnum", singleLine: true, shrink: 1, minWidth: 0 }),
+      h("Spacer"), TX(formatCountdown(m.resetMs), { fontSize: 11, fontWeight: 500, textColor: K.muted, fontFeatures: "tnum", shrink: 0 })));
 }
-function GroupCard(g) {
-  const tone = quotaTone(g.leftPct), expanded = expandedGroups.has(g.key), visible = expanded ? g.models : g.models.slice(0, 4);
-  const countLabel = g.models.length === 1 ? T.modelCountOne : fill(T.modelsCount, { n: g.models.length });
-  return h("Column", { key: `grp-${g.key}`, gap: 9, padding: [12, 13], radius: 11, background: "surface", border: [1, "border"], fillWidth: true, minWidth: 0 },
+const BucketCard = b => h("Column", { key: `b-${b.key}`, gap: 7, padding: [10, 11], radius: 9, background: K.hover, border: [1, "border"], fillWidth: true, minWidth: 0 },
+  h("Row", { gap: 6, alignItems: "center", fillWidth: true, minWidth: 0 },
+    TX(b.label, { fontSize: 12, fontWeight: 700, singleLine: true, grow: 1, shrink: 1, minWidth: 0 }),
+    TX(pctText(b.leftPct), { fontSize: 11, fontWeight: 650, fontFeatures: "tnum", textColor: quotaTone(b.leftPct), background: "surface", radius: 5, padding: [2, 6], shrink: 0 })),
+  QuotaBar(b.leftPct),
+  h("Row", { gap: 4, alignItems: "center", fillWidth: true, minWidth: 0 },
+    Icon("clock", 11, K.muted), TX(formatResetStamp(b.resetMs), { fontSize: 10, textColor: K.muted, fontFeatures: "tnum", singleLine: true, shrink: 1, minWidth: 0 }),
+    h("Spacer"), TX(formatCountdown(b.resetMs), { fontSize: 11, fontWeight: 600, textColor: "text", fontFeatures: "tnum", shrink: 0 })));
+
+function GroupCard(g, gridCols, forceExpand) {
+  const expanded = forceExpand || expandedGroups.has(g.key), models = g.models || [], uniqueNames = [];
+  for (const m of models) { const base = m.displayName.replace(/\s*\([^)]*\)\s*$/, "").trim(); if (base && !uniqueNames.includes(base)) { uniqueNames.push(base); if (uniqueNames.length === 3) break; } }
+  const preview = uniqueNames.join(", "), cols = g.buckets.length > 1 && gridCols > 1 ? 2 : 1;
+  return h("Column", { key: `grp-${g.key}`, gap: 10, padding: [12, 13], radius: 11, background: "surface", border: [1, "border"], fillWidth: true, minWidth: 0 },
     h("Row", { gap: 8, alignItems: "center", fillWidth: true, minWidth: 0 },
       Icon(g.family === "gemini" ? "sparkle" : "bot", 15, "accent"),
-      TX(g.title, { fontSize: 13, fontWeight: 600, singleLine: true, grow: 1, shrink: 1, minWidth: 0 }),
-      TX(countLabel, { fontSize: 11, textColor: K.muted, shrink: 0 }),
-      TX(pctText(g.leftPct), { fontSize: 12, fontWeight: 650, fontFeatures: "tnum", textColor: tone, background: K.hover, radius: 5, padding: [2, 7], shrink: 0 })),
-    QuotaBar(g.leftPct),
-    h("Row", { gap: 5, alignItems: "center", fillWidth: true, minWidth: 0 },
-      Icon("clock", 11, K.muted),
-      TX(formatResetStamp(g.resetMs), { fontSize: 11, textColor: K.muted, fontFeatures: "tnum", singleLine: true, shrink: 1, minWidth: 0 }),
-      h("Spacer"),
-      TX(formatCountdown(g.resetMs), { fontSize: 11, fontWeight: 600, textColor: "text", fontFeatures: "tnum", shrink: 0 })),
-    h("Row", { gap: 5, wrap: true, fillWidth: true },
-      visible.map(m => h("Row", {
-        key: `chip-${m.id}`, padding: [2, 6], radius: 4, background: selectedId === m.id ? "accent" : "accentSubtle",
-        cursor: "pointer", tooltip: `${m.displayName} (${m.id})`,
-        onClick: () => { selectedId = m.id; void copyText(m.id); $metrix.invalidate(); },
-      }, TX(m.id, { fontSize: 10, font: "monospace", textColor: selectedId === m.id ? "accentText" : "accent", singleLine: true })))),
-    g.models.length > 4
+      TX(g.title, { fontSize: 13, fontWeight: 650, singleLine: true, shrink: 0 }),
+      preview ? TX(`${preview}${models.length > uniqueNames.length ? " …" : ""}`, { fontSize: 11, textColor: K.muted, singleLine: true, grow: 1, shrink: 1, minWidth: 0, textAlign: "end" }) : h("Spacer")),
+    h("Grid", { columns: cols, gap: 8, fillWidth: true }, g.buckets.map(BucketCard)),
+    models.length && expanded
+      ? h("Row", { gap: 5, wrap: true, fillWidth: true }, models.map(m => h("Row", {
+          key: `chip-${m.id}`, padding: [2, 6], radius: 4, background: selectedId === m.id ? "accent" : "accentSubtle",
+          cursor: "pointer", tooltip: `${m.displayName} (${m.id})`, onClick: () => { selectedId = m.id; void copyText(m.id); $metrix.invalidate(); },
+        }, TX(m.id, { fontSize: 10, font: "monospace", textColor: selectedId === m.id ? "accentText" : "accent", singleLine: true }))))
+      : null,
+    models.length && !forceExpand
       ? h("Row", { gap: 4, alignItems: "center", cursor: "pointer", onClick: () => { if (expanded) expandedGroups.delete(g.key); else expandedGroups.add(g.key); $metrix.invalidate(); } },
           Icon(expanded ? "chevronDown" : "chevronRight", 12, K.muted),
-          TX(expanded ? T.collapse : fill(T.showAll, { n: g.models.length }), { fontSize: 11, textColor: K.muted }))
+          TX(expanded ? T.collapse : fill(T.showAll, { n: models.length }), { fontSize: 11, textColor: K.muted }))
       : null);
 }
-function TrendSection(groups) {
-  const lead = groups[0], samples = lead ? (trends[lead.seriesKey] || []) : [];
+function TrendSection(buckets) {
+  const lead = buckets[0], samples = lead ? (trends[lead.seriesKey] || []) : [];
   if (!lead || samples.length < 2) return null;
   return h("Column", { gap: 6, padding: [10, 12], radius: 10, background: "surface", border: [1, "border"], fillWidth: true },
     h("Row", { gap: 6, alignItems: "center", fillWidth: true },
@@ -690,29 +693,34 @@ const Problem = detail => h("Column", { grow: 1, center: true, gap: 8, padding: 
 
 function Body(env) {
   if (!snapshot) return error ? Problem(error) : Skeleton();
-  const q = search.trim().toLowerCase();
+  const q = search.trim().toLowerCase(), gridCols = env && env.viewport && finite(env.viewport.width) && env.viewport.width < 400 ? 1 : 2;
   const filtered = q ? snapshot.models.filter(m => `${m.displayName} ${m.id}`.toLowerCase().includes(q)) : snapshot.models;
-  const groups = q ? buildGroups(filtered) : snapshot.groups;
-  const gridCols = env && env.viewport && finite(env.viewport.width) && env.viewport.width < 400 ? 1 : 2;
+  const groups = q
+    ? snapshot.groups.map(g => {
+        const ms = (g.models || []).filter(m => `${m.displayName} ${m.id}`.toLowerCase().includes(q));
+        const hitTitle = `${g.title} ${g.buckets.map(b => b.label).join(" ")}`.toLowerCase().includes(q);
+        return ms.length || hitTitle ? { ...g, models: ms.length ? ms : g.models } : null;
+      }).filter(Boolean)
+    : snapshot.groups;
   return h("Column", { gap: 12, padding: [8, 14, 14, 14], fillWidth: true, minWidth: 0 },
     error ? h("Row", { gap: 8, padding: [8, 10], radius: 8, background: K.hover, alignItems: "center", fillWidth: true }, Icon("alert", 14, "danger"), TX(error, { fontSize: 12, grow: 1, shrink: 1, minWidth: 0, wrap: true })) : null,
     accounts.length > 1 ? h("Select", {
       key: "acct-select", value: String(activeIdx ?? 0), fillWidth: true, items: accounts.map((a, i) => ({ label: a.label, value: String(i) })),
       onChange: v => { const idx = Number(v); if (Number.isInteger(idx) && idx >= 0 && idx < accounts.length) { activeIdx = idx; try { localStorage.setItem("antigravity.accountIdx", String(idx)); } catch {} launchRefresh(); } },
     }) : null,
-    SummaryStrip(snapshot.models, snapshot.groups),
+    SummaryStrip(snapshot.models, snapshot.buckets),
     h("Row", { gap: 8, alignItems: "center", fillWidth: true },
       h("SearchField", { key: "model-search", value: search, placeholder: T.searchPlaceholder, grow: 1, onChange: v => { search = String(v); $metrix.invalidate(); } }),
       h("Segmented", {
         key: "view-mode", value: viewMode, items: [{ label: T.viewGrouped, value: "grouped" }, { label: T.viewGrid, value: "grid" }],
         onChange: v => { viewMode = v === "grid" ? "grid" : "grouped"; try { localStorage.setItem("antigravity.viewMode", viewMode); } catch {} $metrix.invalidate(); },
       })),
-    !snapshot.models.length
+    !snapshot.models.length && !snapshot.groups.length
       ? h("Column", { padding: [20, 12], center: true }, TX(T.noModels, { fontSize: 12, textColor: K.muted, textAlign: "center", wrap: true }))
-      : !filtered.length
-        ? h("Column", { padding: [20, 12], center: true }, TX(T.noMatch, { fontSize: 12, textColor: K.muted, textAlign: "center" }))
-        : viewMode === "grid" ? h("Grid", { columns: gridCols, gap: 10, fillWidth: true }, filtered.map(ModelCard)) : h("Column", { gap: 10, fillWidth: true }, groups.map(GroupCard)),
-    !q ? TrendSection(snapshot.groups) : null);
+      : viewMode === "grid"
+        ? (!filtered.length ? h("Column", { padding: [20, 12], center: true }, TX(T.noMatch, { fontSize: 12, textColor: K.muted, textAlign: "center" })) : h("Grid", { columns: gridCols, gap: 10, fillWidth: true }, filtered.map(ModelCard)))
+        : (!groups.length ? h("Column", { padding: [20, 12], center: true }, TX(T.noMatch, { fontSize: 12, textColor: K.muted, textAlign: "center" })) : h("Column", { gap: 10, fillWidth: true }, groups.map(g => GroupCard(g, gridCols, Boolean(q))))),
+    !q ? TrendSection(snapshot.buckets) : null);
 }
 function Footer() {
   const ageText = snapshot && snapshot.fetchedAt ? formatUpdated(snapshot.fetchedAt) : error ? T.failed : T.loading;
@@ -722,55 +730,55 @@ function Footer() {
     TX(ageText, { fontSize: 10, textColor: K.muted, fontFeatures: "tnum", shrink: 0 }));
 }
 const panelTree = env => h("Column", {
-  preferredWidth: viewMode === "grid" ? 540 : 440, preferredHeight: 620, fill: true, minHeight: 0, safeArea: true,
+  preferredWidth: 540, preferredHeight: 620, fill: true, minHeight: 0, safeArea: true,
   fontSize: 13, textColor: "text", shortcuts: { "CmdOrCtrl+R": launchRefresh },
 }, Header(), h("Divider"), h("Scroll", { grow: 1, minHeight: 0, fillWidth: true }, Body(env)), h("Divider"), Footer());
 
 // -- 托盘、刘海与桌面小组件 --
 function trayTree() {
-  const lead = snapshot && snapshot.groups && snapshot.groups[0], count = snapshot && snapshot.models ? snapshot.models.length : 0;
+  const lead = snapshot && snapshot.buckets && snapshot.buckets[0], count = snapshot && snapshot.models ? snapshot.models.length : 0;
   return {
     icon: "data:image/svg+xml," + encodeURIComponent(BRAND), iconTemplate: true, title: lead ? pctText(lead.leftPct) : "", error,
     tooltip: lead ? `${TITLE} · ${pctText(lead.leftPct)} · ${fill(T.modelsCount, { n: count })} · ${formatCountdown(lead.resetMs)}` : TITLE,
     menu: [{ label: T.refresh, onClick: launchRefresh }, { label: T.copySummary, onClick: () => copyText(buildSummaryText()), disabled: !lead }],
   };
 }
-function notchExpanded(groups) {
+function notchExpanded(buckets) {
   if (!snapshot) return h("Column", { padding: [16, 12], fillWidth: true, center: true }, TX(error || T.loading, { fontSize: 12, textColor: K.muted, textAlign: "center", wrap: true }));
-  if (!groups.length) return h("Column", { padding: [16, 12], fillWidth: true, center: true }, TX(T.noModels, { fontSize: 12, textColor: K.muted, textAlign: "center" }));
+  if (!buckets.length) return h("Column", { padding: [16, 12], fillWidth: true, center: true }, TX(T.noModels, { fontSize: 12, textColor: K.muted, textAlign: "center" }));
   return h("Column", { gap: 10, padding: [10, 12], fillWidth: true },
-    groups.slice(0, 4).map(g => h("Column", { key: `n-${g.key}`, gap: 4, fillWidth: true },
+    buckets.slice(0, 4).map(b => h("Column", { key: `n-${b.key}`, gap: 4, fillWidth: true },
       h("Row", { gap: 8, alignItems: "center", fillWidth: true },
-        TX(g.title, { fontSize: 12, fontWeight: 500, singleLine: true, grow: 1, shrink: 1, minWidth: 0 }),
-        TX(formatCountdown(g.resetMs), { fontSize: 11, textColor: K.muted, fontFeatures: "tnum", shrink: 0 }),
-        TX(pctText(g.leftPct), { fontSize: 12, fontWeight: 600, fontFeatures: "tnum", textColor: quotaTone(g.leftPct), shrink: 0 })),
-      QuotaBar(g.leftPct))));
+        TX(b.title, { fontSize: 12, fontWeight: 500, singleLine: true, grow: 1, shrink: 1, minWidth: 0 }),
+        TX(formatCountdown(b.resetMs), { fontSize: 11, textColor: K.muted, fontFeatures: "tnum", shrink: 0 }),
+        TX(pctText(b.leftPct), { fontSize: 12, fontWeight: 600, fontFeatures: "tnum", textColor: quotaTone(b.leftPct), shrink: 0 })),
+      QuotaBar(b.leftPct))));
 }
 function notchTree() {
-  const groups = (snapshot && snapshot.groups) || [], lead = groups[0] || null, tone = lead ? quotaTone(lead.leftPct) : "text";
+  const buckets = (snapshot && snapshot.buckets) || [], lead = buckets[0] || null, tone = lead ? quotaTone(lead.leftPct) : "text";
   const notchState = typeof $metrix.outputs === "function" ? ($metrix.outputs() || {}).notch : undefined;
   return {
     compact: { leading: Icon("mark", 16, "text"), trailing: lead ? TX(pctText(lead.leftPct), { fontSize: 12, fontWeight: 650, fontFeatures: "tnum", textColor: tone === "success" ? "text" : tone }) : null },
     minimal: Icon("mark", 14, tone === "success" ? "text" : tone),
-    expanded: notchState === "expanded" ? notchExpanded(groups) : undefined,
+    expanded: notchState === "expanded" ? notchExpanded(buckets) : undefined,
     activity,
   };
 }
-const widgetRing = (g, size) => h("Chart", {
+const widgetRing = (b, size) => h("Chart", {
   type: "pie", width: size, height: size, innerRadius: 0.74,
-  data: [{ value: Math.max(clampPct(g.leftPct), 0.001), color: widgetTone(g.leftPct) }, { value: Math.max(100 - clampPct(g.leftPct), 0.001), color: "#8080803d" }],
+  data: [{ value: Math.max(clampPct(b.leftPct), 0.001), color: widgetTone(b.leftPct) }, { value: Math.max(100 - clampPct(b.leftPct), 0.001), color: "#8080803d" }],
 });
-const widgetBar = g => h("Column", { gap: 4 },
-  h("Row", { gap: 6, alignItems: "center" }, TX(g.title, { fontSize: 12, fontWeight: 500, maxLines: 1 }), h("Spacer"), TX(formatCountdown(g.resetMs), { fontSize: 11, color: "secondary", maxLines: 1 }), TX(pctText(g.leftPct), { fontSize: 12, fontWeight: 600, color: widgetTone(g.leftPct), maxLines: 1 })),
-  h("Progress", { value: Math.max(0, Math.min(1, g.leftPct / 100)), color: widgetTone(g.leftPct) }));
+const widgetBar = b => h("Column", { gap: 4 },
+  h("Row", { gap: 6, alignItems: "center" }, TX(b.title, { fontSize: 12, fontWeight: 500, maxLines: 1 }), h("Spacer"), TX(formatCountdown(b.resetMs), { fontSize: 11, color: "secondary", maxLines: 1 }), TX(pctText(b.leftPct), { fontSize: 12, fontWeight: 600, color: widgetTone(b.leftPct), maxLines: 1 })),
+  h("Progress", { value: Math.max(0, Math.min(1, b.leftPct / 100)), color: widgetTone(b.leftPct) }));
 function widgetTree(family) {
   const heading = h("Row", { gap: 6, alignItems: "center" }, h("Icon", { svg: BRAND, size: 14, color: "accent" }), TX(TITLE, { fontSize: 13, fontWeight: 600, maxLines: 1 }), h("Spacer"), family !== "small" && snapshot && snapshot.plan ? h("Badge", { text: snapshot.plan }) : null);
   if (!snapshot) return h("Column", { gap: 6 }, heading, h("Spacer"), TX(error ? T.failed : T.loading, { fontSize: 12, color: "secondary", textAlign: "center" }), error ? TX(T.reconnect, { fontSize: 11, color: "secondary", textAlign: "center", maxLines: 2 }) : null, h("Spacer"));
-  const groups = snapshot.groups || [];
-  if (!groups.length) return h("Column", { gap: 6 }, heading, h("Spacer"), TX(T.noModels, { fontSize: 12, color: "secondary", textAlign: "center" }), h("Spacer"));
-  const lead = groups[0];
+  const buckets = snapshot.buckets || [];
+  if (!buckets.length) return h("Column", { gap: 6 }, heading, h("Spacer"), TX(T.noModels, { fontSize: 12, color: "secondary", textAlign: "center" }), h("Spacer"));
+  const lead = buckets[0];
   if (family === "small") return h("Column", { gap: 6 }, heading, h("Spacer"), h("Row", { gap: 10, alignItems: "center" }, widgetRing(lead, 48), h("Column", { gap: 2 }, TX(pctText(lead.leftPct), { fontSize: 22, fontWeight: 700, color: widgetTone(lead.leftPct), maxLines: 1 }), TX(lead.title, { fontSize: 11, color: "secondary", maxLines: 1 }))), TX(formatCountdown(lead.resetMs), { fontSize: 11, color: "secondary", maxLines: 1 }));
-  return h("Column", { gap: family === "large" ? 10 : 8 }, heading, h("Row", { gap: 12, alignItems: "center" }, widgetRing(lead, family === "large" ? 56 : 44), h("Column", { gap: 2 }, TX(pctText(lead.leftPct), { fontSize: 22, fontWeight: 700, color: widgetTone(lead.leftPct), maxLines: 1 }), TX(`${fill(T.modelsCount, { n: snapshot.models.length })} · ${formatCountdown(lead.resetMs)}`, { fontSize: 11, color: "secondary", maxLines: 1 }))), h("Divider"), h("Column", { gap: 8 }, groups.slice(0, family === "large" ? 5 : 2).map(widgetBar)));
+  return h("Column", { gap: family === "large" ? 10 : 8 }, heading, h("Row", { gap: 12, alignItems: "center" }, widgetRing(lead, family === "large" ? 56 : 44), h("Column", { gap: 2 }, TX(pctText(lead.leftPct), { fontSize: 22, fontWeight: 700, color: widgetTone(lead.leftPct), maxLines: 1 }), TX(`${fill(T.modelsCount, { n: snapshot.models.length })} · ${formatCountdown(lead.resetMs)}`, { fontSize: 11, color: "secondary", maxLines: 1 }))), h("Divider"), h("Column", { gap: 8 }, buckets.slice(0, family === "large" ? 5 : 2).map(widgetBar)));
 }
 
 // -- 生命周期导出 --
