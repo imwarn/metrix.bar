@@ -7,6 +7,9 @@
 ```text
 .
 ├── dashboards/                # 自定义看板集合，每个看板独占一个子目录
+│   ├── antigravity/           # Antigravity 模型配额与重置倒计时看板
+│   │   ├── antigravity.bar    # Metrix.Bar Protocol v0 看板源码（含 Notch / Widget / SQLite）
+│   │   └── antigravity.test.cjs # Node.js 离线契约测试
 │   └── beszel/                # Beszel 主机与容器监控看板
 │       ├── beszel.bar         # Metrix.Bar Protocol v0 看板源码
 │       ├── beszel.test.cjs    # Node.js 离线契约测试
@@ -21,6 +24,7 @@
 
 | 看板 ID | 路径 | 版本 | 协议 | 说明 |
 | --- | --- | --- | --- | --- |
+| `antigravity` | [`dashboards/antigravity/antigravity.bar`](dashboards/antigravity/antigravity.bar) | `1.0.0` | `AGPL-3.0-only` | 读取本地导出的 Antigravity / Google OAuth 认证 JSON，展示有额度模型、配额分组/双列卡片、倒计时、Notch 与桌面 Widget |
 | `beszel` | [`dashboards/beszel/beszel.bar`](dashboards/beszel/beszel.bar) | `1.0.0` | `AGPL-3.0-only` | 通过 Tailscale 查看 Beszel 主机状态、1h/24h 资源趋势与容器用量 |
 
 ## 本地测试
@@ -28,6 +32,7 @@
 所有契约测试仅依赖 Node.js 内置模块（`node:vm`、`node:assert`），可在仓库根目录直接运行：
 
 ```bash
+node dashboards/antigravity/antigravity.test.cjs
 node dashboards/beszel/beszel.test.cjs
 ```
 

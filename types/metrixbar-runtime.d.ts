@@ -11,11 +11,11 @@ declare namespace Metrix {
   event?(name: string, payload: unknown): unknown | Promise<unknown>;
  }
  interface MenuItem { label?: string; onClick?: Handler; disabled?: boolean; separator?: boolean; checked?: boolean; radio?: boolean; shortcut?: string; tooltip?: string; items?: MenuItem[] }
- interface Tray { title?: string; icon?: string; iconTemplate?: boolean; tooltip?: string; error?: string; menu?: MenuItem[]; dropFiles?: boolean; onDrop?: (event: FileDropEvent) => unknown; onDragOver?: (event: FileDragOverEvent) => unknown }
- interface View { tray?: Tray; panel?: Child }
+ interface Tray { content?: TrayContentRoot; iconAnimation?: {frames: string[]; intervalMS: number}; title?: string; icon?: string | null; iconTemplate?: boolean; tooltip?: string; error?: string; menu?: MenuItem[]; dropFiles?: boolean; onDrop?: (event: FileDropEvent) => unknown; onDragOver?: (event: FileDragOverEvent) => unknown }
+ interface View { tray?: Tray; panel?: Child; notch?: NotchView; widget?: Partial<Record<"small" | "medium" | "large", WidgetChild>> }
  type JSONValue = null | boolean | number | string | JSONValue[] | { [key: string]: JSONValue };
  type TextDropFormat = "text/plain" | "text/html" | "text/markdown";
- type FileDropSource = "panel" | "menubar" | "sidebar-left" | "sidebar-right" | "sidebar-bottom";
+ type FileDropSource = "panel" | "menubar" | "sidebar-left" | "sidebar-right" | "sidebar-bottom" | "notch";
  type FileDropEvent = {kind: "files"; paths: string[]; source: FileDropSource; operation: "copy"};
  type FileDragOverEvent = {over: boolean; kind: "files"; source: FileDropSource};
  type DropEvent = FileDropEvent | {kind: "local"; value: JSONValue} | {kind: "data"; items: {types: TextDropFormat[]; data: Partial<Record<TextDropFormat,string>>}[]; operation: "copy"};
@@ -31,10 +31,19 @@ declare namespace Metrix {
  interface OCR { recognize(data: ImageInput, options?: OCROptions): Promise<OCRResult> }
  interface FaceResult { faces: {confidence: number; bounds: ImageBounds}[] }
  interface Face { detect(data: ImageInput): Promise<FaceResult> }
- interface PanelState { open: boolean }
+ type HTMLAsset = { path: string; contentType: string; sha256?: string } & ({body: string | ArrayBuffer | ArrayBufferView; url?: never} | {url: string; body?: never});
+ interface HTMLRenderOptions { html: string; assets?: HTMLAsset[]; readyScript?: string; viewport: {width: number; height: number; scale?: number}; timeoutMs?: number }
+ interface HTMLRenderResult { src: string; width: number; height: number; format: "png"; warnings: string[] }
+ interface LoadedImage { src: string; width: number; height: number; format: "png" }
+ interface ImageLoader { load(source: string | ArrayBuffer | ArrayBufferView): Promise<LoadedImage> }
+ interface HTML { render(options: HTMLRenderOptions): Promise<HTMLRenderResult> }
+ type OpenMode = "flyout" | "dialog" | "window";
+ type OpenSource = "menubar" | "notch" | "sidebar-left" | "sidebar-right" | "sidebar-bottom" | "programmatic" | "shortcut" | "desktop-app";
+ interface PanelState { open: boolean; mode: OpenMode | null; source: OpenSource | null; alwaysOnTop: boolean; alwaysOnTopSupported: boolean; alwaysOnTopEffective: boolean | null }
  interface PanelScreenshotOptions { theme?: "system" | "light" | "dark"; width?: number; height?: number; scale?: number }
  interface Panel {
   open(): Promise<PanelState>; close(): Promise<PanelState>; toggle(): Promise<PanelState>; state(): Promise<PanelState>;
+  setAlwaysOnTop(value: boolean): Promise<PanelState>;
   screenshot(options: PanelScreenshotOptions & { output: "file" }): Promise<string>;
   screenshot(options?: PanelScreenshotOptions & { output?: "blob" }): Promise<Blob>;
  }
@@ -64,23 +73,71 @@ declare namespace Metrix {
   close(): Promise<void>;
  }
  interface SQLite { open(name: string): Promise<SQLiteDatabase> }
+ interface PeripheralBattery { id: string; name: string; transport: "bluetooth" | "usb" | "unknown"; vendorId: number | null; productId: number | null; batteryLevel: number | null }
+ interface HIDDevice { token: string; vendorId: number; productId: number; usagePage: number; usage: number; manufacturer?: string; product?: string }
+ interface HIDReport { reportId: number; data: Uint8Array }
+ interface HIDEvent { type: "connected" | "disconnected"; device: HIDDevice }
+ interface HIDSession {
+  readInputReport(options?: {timeout?: number}): Promise<HIDReport>;
+  writeOutputReport(report: HIDReport): Promise<void>;
+  getFeatureReport(options: {reportId: number; length: number}): Promise<HIDReport>;
+  setFeatureReport(report: HIDReport): Promise<void>;
+  close(): Promise<void>;
+ }
+ interface HID {
+  enumerate(): Promise<HIDDevice[]>;
+  open(token: string, options: {numberedReports: boolean}): Promise<HIDSession>;
+  watch(): Promise<void>;
+  stopWatching(): Promise<void>;
+ }
  interface BluetoothCapabilities { supported: boolean; transport: "ble" }
  interface BluetoothDevice { id: string; name: string; rssi: number; services: string[] }
  interface BluetoothCharacteristic { uuid: string; read: boolean; write: boolean; notify: boolean }
  interface BluetoothNotification { type: "bluetooth.notification"; token: string; connection: string; service: string; characteristic: string; data: number[] }
  interface AuthOptions { url: string; timeoutMs?: number; callback?: 'loopback' | 'scheme' }
  interface Auth { authorize(options: AuthOptions): Promise<Record<string, string>> }
+ interface CapabilityOptions { formats?: string[]; languages?: string[] }
+ type NotchState = "compact" | "minimal" | "expanded";
+ interface NotchCompact { leading?: Child; trailing?: Child }
+ interface NotchView { compact?: NotchCompact; minimal?: Child; expanded?: Child; activity?: {id: string; expiresAt: number}; onFileDrop?: (event: FileDropEvent) => unknown }
+ type Subscription = "free" | "plus";
+ interface InboxAddress { name?: string; address: string }
+ interface InboxMessage { subject: string; from: InboxAddress[]; to: InboxAddress[]; cc: InboxAddress[]; date?: number; text: string; attachments: {name?: string; type: string; size: number}[]; truncated?: boolean }
+ type SystemMediaAction = "play" | "pause" | "next" | "previous" | "seek" | "shuffle" | "repeat";
+ type SystemMediaRepeat = "off" | "one" | "all";
+ interface SystemMediaSnapshot { status: "playing" | "paused" | "stopped" | "idle" | "unavailable"; title?: string; artist?: string; album?: string; source?: string; app?: {id: string; name?: string}; positionMs?: number; durationMs?: number; sampledAt?: number; shuffle?: boolean; repeat?: SystemMediaRepeat; artwork?: string; session?: string; actions?: SystemMediaAction[] }
+ interface SystemMedia {
+  watch(): void; stopWatching(): void;
+  control?(session: string, ...action: [Exclude<SystemMediaAction, "seek" | "shuffle" | "repeat">] | ["seek", positionMs: number] | ["shuffle", on: boolean] | ["repeat", mode: SystemMediaRepeat]): Promise<void>;
+ }
+ interface OutputDemand { notch?: NotchState; tray: boolean; panel: boolean; widget: { known: boolean; families: Array<"small" | "medium" | "large"> } }
  interface Host {
-  caniuse(name: string, options?: {formats?: string[]; languages?: string[]}): Promise<boolean>;
+  /** Read consumers synchronously: tray includes sidebar metadata; panel means full panel content. Unknown widget usage stays conservative. */
+  outputs(): OutputDemand;
+  subscription?(): Subscription;
+  readonly systemMedia?: SystemMedia;
+  /** Probe an API, host path, system command, render target or runtime global without executing it. */
+  caniuse(name: string, options?: CapabilityOptions): Promise<boolean>;
   readonly barcode: Barcode;
   readonly ocr: OCR;
   readonly face: Face;
+  readonly html: HTML;
+  readonly image: ImageLoader;
   readonly auth: Auth;
   setSecret(name: string, value: string): Promise<void>;
   deleteSecret(name: string): Promise<void>;
   readonly sqlite: SQLite;
   readonly panel: Panel;
+  readonly inbox: {
+   boxes(): Promise<{id: string; name: string; address: string; paused: boolean; message_count: number; last_received_at: number | null}[]>;
+   list(inboxId: string, options?: {limit?: number; before?: number}): Promise<{seq: number; inbox_id: string; source: string; received_at: number; size: number; subject: string; sender: string}[]>;
+   read(inboxId: string, seq: number): Promise<Uint8Array>;
+   message(inboxId: string, seq: number): Promise<InboxMessage>;
+   remove(inboxId: string, seq: number): Promise<void>;
+  };
+  readonly hid: HID;
   readonly audio: Audio;
+  system(command: "power.devices"): Promise<PeripheralBattery[]>;
   system(command: "bluetooth.capabilities"): Promise<BluetoothCapabilities>;
   system(command: "bluetooth.scan", args: {services: string[]; durationMs?: number}): Promise<BluetoothDevice[]>;
   system(command: "bluetooth.connect", args: {device: string}): Promise<string>;
@@ -93,6 +150,7 @@ declare namespace Metrix {
   system(command: "bluetooth.disconnect", args: {connection: string}): Promise<void>;
   system(command: string, args?: Record<string, unknown>): Promise<unknown>;
   readonly appVersion: string;
+  readonly platform: "darwin" | "windows" | "linux" | "js";
   readonly userName: string;
   readCredential(service: string, account: string): Promise<string>;
   schedule(delayMs: number | null): void;
@@ -165,6 +223,42 @@ declare namespace Metrix {
 }
 
 declare namespace Metrix {
+ interface MemoryDetails { timestamp: number; totalBytes: number | null; availableBytes: number | null; activeBytes: number | null; inactiveBytes: number | null; wiredBytes: number | null; compressedBytes: number | null; appBytes: number | null; cachedFilesBytes: number | null; supported: Record<string, boolean> }
+ interface ThermalState { timestamp: number; state: "nominal" | "fair" | "serious" | "critical" | "unknown" }
+ interface FanSample { id: string; name: string; rpm: number | null; minRPM: number | null; maxRPM: number | null }
+ interface GPUSample { id: string; name: string | null; vendor: string | null; utilizationPercent: number | null; coreClockHz: number | null; memoryClockHz: number | null; memoryTotalBytes: number | null; memoryUsedBytes: number | null; temperatureC: number | null }
+ interface BatteryInfo { timestamp: number; present: boolean; externalPower: boolean | null; condition: string | null; cycleCount: number | null; fullCapacityMWh: number | null; designCapacityMWh: number | null; healthPercent: number | null; voltageV: number | null; chargeRateMW: number | null }
+ interface ProcessIdentity { pid: number; createTime: number }
+ interface ProcessSample { pid: number; createTime: number | null; name: string | null; cpuSeconds: number | null; rssBytes: number | null }
+ interface ProcessNetworkSample { pid: number; receivedBytes: number | null; sentBytes: number | null }
+ interface ProcessInfo extends ProcessIdentity { name: string | null; path: string | null; appName: string | null }
+ interface MountedVolume { id: string; path: string; name: string; device: string; uuid: string | null; external: boolean | null; ejectable: boolean | null }
+ interface Host {
+  system(command: "metrics.memory.details"): Promise<MemoryDetails>;
+  system(command: "metrics.thermal.state"): Promise<ThermalState>;
+  system(command: "metrics.sensors.fans"): Promise<{timestamp: number; devices: FanSample[]}>;
+  system(command: "metrics.gpu.snapshot"): Promise<{timestamp: number; devices: GPUSample[]}>;
+  system(command: "power.batteryInfo"): Promise<BatteryInfo>;
+  system(command: "metrics.process.snapshot"): Promise<{timestamp: number; processes: ProcessSample[]; partial: boolean}>;
+  system(command: "metrics.process.network"): Promise<{timestamp: number; processes: ProcessNetworkSample[]}>;
+  system(command: "metrics.process.info", args: ProcessIdentity): Promise<ProcessInfo>;
+  system(command: "metrics.disk.volumes"): Promise<{timestamp: number; volumes: MountedVolume[]}>;
+  /** Requires both its optional API and an explicit process-control permission. */
+  system(command: "process.activate" | "process.terminate" | "process.kill", args: ProcessIdentity): Promise<{success: true}>;
+  /** Requires both storage-control declarations and a current external, ejectable mount. */
+  system(command: "storage.eject", args: {path: string; uuid: string}): Promise<{success: true}>;
+ }
+ interface TrayLayoutProps { width?: number; height?: number; gap?: number; padding?: number; paddingX?: number; paddingY?: number; alignItems?: "start" | "center" | "end" | "stretch"; justify?: "start" | "center" | "end" | "space-between" | "space-around" | "space-evenly" }
+ type TrayContentRoot = TrayContentNode & {props: TrayLayoutProps & {width: number; height: 22}};
+ type TrayContentNode =
+  | {type: "Row" | "Column"; props?: TrayLayoutProps; children?: TrayContentNode[]}
+  | {type: "Text"; props?: TrayLayoutProps & {text?: string; fontSize?: number; fontWeight?: 100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 900}; children?: (string | number)[]}
+  | {type: "Spacer"; props?: TrayLayoutProps}
+  | {type: "Icon"; props: TrayLayoutProps & {svg: string; fontSize?: number}}
+  | {type: "Chart"; props: TrayLayoutProps & {type: "line" | "area"; series: {name?: string; points: {x: number; y: number}[]}[]; strokeWidth?: number}};
+}
+
+declare namespace Metrix {
 interface BaseProps {
   "Browse"?: boolean | string;
   "Cache"?: boolean | string;
@@ -175,15 +269,22 @@ interface BaseProps {
   "PlaceholderColor"?: string;
   "Scrollbars"?: boolean | string;
   "absolute"?: boolean | string;
+  "accessDisabled"?: boolean | string;
+  "accessHidden"?: boolean | string;
+  "accessSelected"?: boolean | string;
   "alignContent"?: string;
   "alignItems"?: string;
   "alignSelf"?: string;
   "animatePose"?: unknown;
   "aspectRatio"?: number;
   "attach"?: [string, string];
+  "attachEdgeMargin"?: number;
+  "attachedOrigin"?: boolean | string;
+  "autoComplete"?: "none" | "inline" | "list" | "both";
   "autoFocus"?: boolean | string;
   "backfaceHidden"?: boolean | string;
   "background"?: string;
+  "balance"?: boolean | string;
   "basis"?: number | `${number}%`;
   "basisPercent"?: number;
   "blur"?: number;
@@ -199,25 +300,34 @@ interface BaseProps {
   "bottom"?: number | `${number}%`;
   "bottomPercent"?: number;
   "browse"?: boolean | string;
+  "busy"?: boolean | string;
   "cache"?: boolean | string;
+  "caretColor"?: string;
   "caretWidth"?: number;
   "center"?: boolean | string;
   "checked"?: boolean | string;
+  "childExit"?: Motion;
   "clip"?: boolean | string;
+  "clipInset"?: [number, number, number, number, number] | `${number}%`;
+  "clipInsetPercent"?: [number, number, number, number, number];
   "clipX"?: boolean | string;
   "clipY"?: boolean | string;
   "column"?: boolean | string;
+  "columnCount"?: number;
+  "columnIndex"?: number;
   "columnSpan"?: number;
   "columnStart"?: number;
   "columnTracks"?: unknown;
   "columns"?: number;
   "conicGradient"?: ConicGradient;
   "contentTransition"?: unknown;
+  "current"?: "none" | "item" | "page" | "step" | "location" | "date" | "time";
   "cursor"?: string;
   "debug"?: boolean | string;
   "decorationColor"?: string;
   "decorationThickness"?: number;
   "description"?: string;
+  "dimDisabled"?: boolean | string;
   "direction"?: Direction;
   "dividers"?: [number, string];
   "dottedUnderline"?: boolean | string;
@@ -228,13 +338,16 @@ interface BaseProps {
   "error"?: string;
   "expanded"?: boolean | string;
   "fill"?: boolean | string;
+  "fillEqually"?: boolean | string;
   "fillHeight"?: boolean | string;
   "fillWidth"?: boolean | string;
   "fit"?: string;
   "fixedLineHeight"?: number;
-  "focus"?: boolean | string;
-  "focusGroup"?: string;
+  "focus"?: boolean | string | FocusOptions;
+  "focusGroup"?: "horizontal" | "vertical" | "both" | "all";
   "focusRing"?: boolean | string;
+  "focusRingColor"?: string;
+  "focusRingOffset"?: number;
   "focusable"?: boolean | string;
   "font"?: string;
   "fontFeatures"?: string | (string)[];
@@ -248,18 +361,23 @@ interface BaseProps {
   "grid"?: boolean | string;
   "gridRows"?: number;
   "grow"?: number;
+  "hasPopup"?: "none" | "menu" | "listBox" | "listbox" | "tree" | "grid" | "dialog";
   "height"?: number | `${number}%`;
   "heightPercent"?: number;
   "hidden"?: boolean | string;
   "ignoreInput"?: boolean | string;
   "inputMethod"?: boolean | string;
   "insetShadow"?: unknown;
+  "invalid"?: boolean | string;
   "invisible"?: boolean | string;
   "italic"?: boolean | string;
   "justify"?: string;
   "justifyItems"?: string;
   "justifySelf"?: string;
   "keepFocus"?: boolean | string;
+  "keepOpen"?: boolean | string;
+  "keepScrollbars"?: boolean | string;
+  "keyShortcuts"?: string;
   "label"?: string;
   "lang"?: string;
   "left"?: number | `${number}%`;
@@ -278,8 +396,12 @@ interface BaseProps {
   "marginTop"?: number | "auto";
   "marginX"?: number | "auto";
   "marginY"?: number | "auto";
+  "maskConicGradient"?: ConicGradient;
+  "maskLinearGradient"?: LinearGradient;
+  "maskRadialGradient"?: RadialGradient;
   "maxHeight"?: number | `${number}%`;
   "maxHeightPercent"?: number;
+  "maxLength"?: number;
   "maxLines"?: number;
   "maxWidth"?: number | `${number}%`;
   "maxWidthPercent"?: number;
@@ -289,8 +411,13 @@ interface BaseProps {
   "minWidthPercent"?: number;
   "mixed"?: boolean | string;
   "modal"?: boolean | string;
+  "multiline"?: boolean | string;
+  "multiselectable"?: boolean | string;
+  "noShadow"?: boolean | string;
   "noWrap"?: boolean | string;
+  "objectPosition"?: [number, number];
   "opacity"?: number;
+  "orientation"?: "horizontal" | "vertical" | "both" | "all";
   "padding"?: number | (number)[];
   "paddingBottom"?: number;
   "paddingEnd"?: number;
@@ -305,26 +432,38 @@ interface BaseProps {
   "perspective"?: number;
   "placeholder"?: string;
   "placeholderColor"?: string;
+  "positionInSet"?: [number, number];
+  "preserveSpaces"?: boolean | string;
+  "pretty"?: boolean | string;
   "radialGradient"?: RadialGradient;
   "radius"?: number | (number)[];
   "range"?: [number, number, number];
   "readOnly"?: boolean | string;
+  /** Replaces [start, end) rune indices, preserving undo. Executes on every render while present. */
+  "replaceText"?: [number, number, string];
   "reverse"?: boolean | string;
   "right"?: number | `${number}%`;
   "rightPercent"?: number;
   "role"?: string;
+  "roleDescription"?: string;
   "rotate"?: number;
   "rotateX"?: number;
   "rotateY"?: number;
   "row"?: boolean | string;
+  "rowCount"?: number;
+  "rowIndex"?: number;
   "rowSpan"?: number;
   "rowStart"?: number;
   "rowTracks"?: unknown;
   "rowWidth"?: number;
   "scale"?: [number, number];
-  "scrollIntoView"?: boolean | string;
+  "scrollIntoView"?: boolean | string | ScrollIntoViewOptions;
+  "scrollSnap"?: "none" | "mandatory" | "proximity";
+  "scrollbarAxes"?: [boolean, boolean];
   "scrollbarInsets"?: number | (number)[];
+  "scrollbarStyle"?: ScrollbarStyle;
   "scrollbars"?: boolean | string;
+  "search"?: boolean | string;
   "selectable"?: boolean | string;
   "selected"?: boolean | string;
   "selectionColor"?: string;
@@ -335,23 +474,38 @@ interface BaseProps {
   "singleLine"?: boolean | string;
   "size"?: [number, number];
   "skew"?: [number, number];
+  "snapAlign"?: "start" | "center" | "end";
+  "snapAlignX"?: "start" | "center" | "end";
+  "snapAlignY"?: "start" | "center" | "end";
+  "sort"?: "none" | "ascending" | "descending" | "other";
+  "splitReset"?: number;
   "start"?: number | `${number}%`;
   "startPercent"?: number;
   "step"?: number;
+  "sticky"?: boolean | string;
   "strikethrough"?: boolean | string;
   "stripes"?: [string, number, number, number];
+  "tabSize"?: number;
+  "tabStop"?: boolean | string;
   "textAlign"?: string;
   "textBackground"?: string;
   "textColor"?: string;
   "textRanges"?: unknown;
+  "textShadow"?: [number, number, number, string];
+  "textStroke"?: [number, string];
   "tooltip"?: string;
   "top"?: number | `${number}%`;
   "topPercent"?: number;
   "transform"?: unknown;
   "transformOrigin"?: [number, number];
-  "transition"?: unknown;
-  "translate"?: [number, number];
+  "transition"?: Transition;
+  "translate"?: [number, number] | `${number}%`;
+  "translatePercent"?: [number, number];
+  "translateZ"?: number;
+  "truncateMiddle"?: boolean | string;
+  "truncateStart"?: boolean | string;
   "underline"?: boolean | string;
+  "underlineOffset"?: number;
   "unselectable"?: boolean | string;
   "value"?: string;
   "vertical"?: boolean | string;
@@ -360,14 +514,50 @@ interface BaseProps {
   "widthPercent"?: number;
   "wrap"?: boolean | string;
   "wrapReverse"?: boolean | string;
+  "zIndex"?: number;
 }
 
 type Direction = "ltr" | "rtl";
+type Motion = { x?: number; y?: number; xPercent?: number; yPercent?: number; opacity?: number; collapse?: boolean; scale?: number; rotate?: number; blur?: number; flip?: boolean };
+interface TextSpan { text?: string; font?: string; size?: number; weight?: number; italic?: boolean; color?: string; underline?: boolean; wavyUnderline?: boolean; strikethrough?: boolean; decorationColor?: string; decorationThickness?: number; background?: string; letterSpacing?: number; features?: string; paddingStart?: number }
+interface MeterLevels { warning?: number; critical?: number; normalColor?: string; warningColor?: string; criticalColor?: string }
+type Animation = number | "smooth" | "snappy" | "bouncy" | { duration?: number; delay?: number; ease?: string; spring?: string | { bounce?: number; mass?: number; stiffness?: number; damping?: number; precision?: number; velocity?: number; duration?: number } };
+type Transition = { duration?: number; ease?: string; animation?: Animation; exitDuration?: number; exitEase?: string; exitDelay?: number; position?: boolean; size?: boolean; colors?: boolean; shadows?: boolean; width?: boolean; height?: boolean; enter?: Motion; exit?: Motion; afterExits?: boolean; match?: unknown; fly?: boolean; scaleContent?: boolean };
+type FocusOptions = { preventScroll?: boolean };
+type ScrollbarStyle = { trackWidth?: number; thumbWidth?: number; radius?: number; minLength?: number; square?: boolean; flush?: boolean; track?: string; thumb?: string; hover?: string; active?: string };
+type ScrollIntoViewOptions = { block?: "nearest" | "start" | "center" | "end"; inline?: "nearest" | "start" | "center" | "end"; animation?: Animation };
 type GradientStop = { color?: string; at?: number };
 type GradientPoint = { x?: number; y?: number };
 type LinearGradient = { from?: string; to?: string; angle?: number; start?: number; end?: number; oklab?: boolean; stops?: GradientStop[] };
 type RadialGradient = { stops?: GradientStop[]; center?: GradientPoint; radius?: number; oklab?: boolean };
 type ConicGradient = { stops?: GradientStop[]; center?: GradientPoint; angle?: number; oklab?: boolean };
+
+type WidgetColor = "primary" | "secondary" | "accent" | "success" | "warning" | "error" | `#${string}`;
+interface WidgetBaseProps { key?: string; padding?: number }
+interface WidgetLayoutProps extends WidgetBaseProps { gap?: number; width?: number; height?: number; radius?: number; background?: WidgetColor; alignItems?: "start" | "center" | "end" }
+interface WidgetTextStyle extends WidgetBaseProps { color?: WidgetColor; textColor?: WidgetColor; bold?: boolean; italic?: boolean; fontSize?: number; fontWeight?: number }
+type WidgetTextSpan = Pick<TextSpan, "text" | "size" | "weight" | "italic" | "underline" | "strikethrough"> & { color?: WidgetColor };
+interface WidgetChartSeries { name?: string; color?: WidgetColor; points: (number | { x?: number; y: number; valueLabel?: string })[] }
+interface WidgetComponentProps {
+ Column: WidgetLayoutProps;
+ Row: WidgetLayoutProps;
+ Box: WidgetLayoutProps;
+ Grid: WidgetLayoutProps & { columns?: number };
+ Text: WidgetTextStyle & { text?: string; maxLines?: number; textAlign?: "start" | "center" | "end" };
+ RichText: WidgetTextStyle & { spans?: WidgetTextSpan[]; maxLines?: number; textAlign?: "start" | "center" | "end" };
+ Badge: WidgetTextStyle & { text?: string; background?: WidgetColor };
+ Avatar: WidgetBaseProps & { name?: string; src?: string; size?: number; color?: WidgetColor; textColor?: WidgetColor; background?: WidgetColor };
+ Icon: WidgetBaseProps & { svg: string; size?: number; color?: WidgetColor; textColor?: WidgetColor };
+ Image: WidgetBaseProps & { src: string; width?: number; height?: number; radius?: number };
+ Progress: WidgetBaseProps & { value?: number; color?: WidgetColor; textColor?: WidgetColor };
+ Meter: WidgetBaseProps & { value?: number; min?: number; max?: number; levels?: MeterLevels; color?: WidgetColor; textColor?: WidgetColor };
+ Chart: WidgetBaseProps & { type?: "line" | "area" | "bar" | "pie"; width?: number; height?: number; series?: WidgetChartSeries[]; data?: { value: number; label?: string; color?: WidgetColor }[]; innerRadius?: number; yDomain?: [number, number]; strokeWidth?: number };
+ Spacer: { key?: string };
+ Divider: { key?: string; orientation?: "horizontal" | "vertical" };
+}
+type WidgetComponentType = keyof WidgetComponentProps;
+type WidgetNode = { [K in WidgetComponentType]: { type: K; props?: WidgetComponentProps[K]; key?: string; children?: WidgetChild[] } }[WidgetComponentType] | { type?: never; text: string };
+type WidgetChild = WidgetNode | string | number | boolean | null | undefined;
 
 type TableCells = {cursor?: string; anchor?: string; all?: boolean};
 type TableColumn = {title?: string; id?: string; width?: number; minWidth?: number; maxWidth?: number; align?: "start" | "end" | "left" | "right" | "center"; sortable?: boolean; fixed?: boolean; rowHeader?: boolean};
@@ -412,7 +602,7 @@ interface EditorCompletion { label: string; detail?: string; kind?: "text" | "ke
 interface EditorCompletions extends EditorIdentity { requestId: number; start: number; items: EditorCompletion[] }
 interface EditorHover extends EditorIdentity { requestId: number; start: number; end: number; text: string }
 interface EditorDiagnostics extends EditorIdentity { items: {start: number; end: number; severity: "error" | "warning" | "info" | "hint"; message: string; source?: string}[] }
-interface EditorInlays extends EditorIdentity { items: {offset: number; text: string}[] }
+interface EditorInlays extends EditorIdentity { items: {offset: number; text: string; trailing?: boolean; ellipsis?: string}[] }
 
 type RichTextFormatState = "off" | "on" | "mixed";
 interface RichTextFormatting { bold: RichTextFormatState; italic: RichTextFormatState; underline: RichTextFormatState; strikethrough: RichTextFormatState; code: RichTextFormatState; link: string; heading: number; list: "none" | "bullets" | "numbers" | "tasks"; quote: boolean; codeBlock: boolean; paragraphsMixed: boolean; canUndo: boolean; canRedo: boolean }
@@ -430,6 +620,10 @@ interface SpecialProps {
  key?: string;
  activeDescendant?: string;
  scrollWith?: string;
+ controls?: string;
+ describedBy?: string;
+ errorMessage?: string;
+ labelledBy?: string;
  onComposingChange?: (composing: boolean) => unknown;
  onTextSelectionChange?: (selection: {start: number; end: number; anchor: number; caret: number}) => unknown;
  onPaste?: (text: string) => unknown;
@@ -449,6 +643,7 @@ interface SpecialProps {
  onColumnLayoutChange?: Handler;
  onDismiss?: Handler;
  onDoubleClick?: Handler;
+ onEndReached?: Handler;
  onGutterButton?: Handler;
  onHeaderMenu?: Handler;
  onInView?: Handler;
@@ -459,21 +654,25 @@ interface SpecialProps {
  onOpenChange?: Handler;
  onOriginalChange?: Handler;
  onPressedOutside?: Handler;
+ onQueryChange?: Handler;
  onReorder?: Handler;
  onRightClick?: Handler;
+ onRowClick?: () => unknown;
  onSelectionChange?: Handler;
  onSort?: Handler;
  onSortBy?: Handler;
  onSubmit?: Handler;
  onSwipe?: Handler;
+ onUnmount?: () => unknown;
+ onWindowDoubleClick?: () => unknown;
  drag?: JSONValue;
- dragData?: {text?: string; html?: string; markdown?: string};
+ dragData?: {text?: string; html?: string; markdown?: string} | {files: string[]};
  dropFormats?: TextDropFormat[];
  dropFiles?: boolean;
  onDrop?: (event: DropEvent) => unknown;
  onDragOver?: (event: DragOverEvent) => unknown;
 }
-type StateProps = BaseProps & Omit<SpecialProps, "tw" | "safeArea" | "preferredWidth" | "preferredHeight" | "drag" | "dragData" | "dropFormats" | "dropFiles" | "onDrop" | "onDragOver" | "activeDescendant" | "scrollWith">;
+type StateProps = BaseProps & Omit<SpecialProps, "tw" | "safeArea" | "preferredWidth" | "preferredHeight" | "drag" | "dragData" | "dropFormats" | "dropFiles" | "onDrop" | "onDragOver" | "activeDescendant" | "scrollWith" | "controls" | "describedBy" | "errorMessage" | "labelledBy">;
 interface ComponentProps {
  "Accordion": Omit<BaseProps & SpecialProps, never> & {
  };
@@ -528,8 +727,8 @@ interface ComponentProps {
   "stepMs"?: number;
   "maxSteps"?: number;
  };
- "Chart": Omit<BaseProps & SpecialProps, "series" | "xKind" | "height" | "type" | "axes" | "grid" | "curve" | "strokeWidth" | "hover" | "innerRadius" | "data" | "legend" | "dots" | "xTicks" | "yTicks" | "xDomain" | "yDomain" | "gridStyle" | "referenceLines" | "labels" | "horizontal" | "barRadius" | "barGap" | "appear" | "appearKey" | "candles" | "riseColor" | "fallColor" | "sankey" | "theme" | "padAngle" | "pieLabels"> & {
-  "series"?: { name?: string; color?: string; fill?: boolean | number | {from?: number; to?: number}; points: {x: number; y: number; label?: string; valueLabel?: string}[] }[];
+ "Chart": Omit<BaseProps & SpecialProps, "series" | "xKind" | "height" | "type" | "axes" | "grid" | "curve" | "strokeWidth" | "hover" | "innerRadius" | "data" | "legend" | "dots" | "xTicks" | "yTicks" | "xDomain" | "yDomain" | "gridStyle" | "referenceLines" | "labels" | "horizontal" | "barRadius" | "barGap" | "appear" | "appearKey" | "candles" | "riseColor" | "fallColor" | "sankey" | "theme" | "padAngle" | "pieLabels" | "yScale"> & {
+  "series"?: { name?: string; color?: string; fill?: boolean | number | {from?: number; to?: number}; dashed?: boolean; points: {x: number; y: number; label?: string; valueLabel?: string}[] }[];
   "xKind"?: "number" | "time" | "category";
   "height"?: number;
   "type"?: "line" | "area" | "bar" | "pie" | "radar" | "candlestick" | "sankey";
@@ -561,6 +760,7 @@ interface ComponentProps {
   "theme"?: {colors?: string[]; gridColor?: string; riseColor?: string; fallColor?: string; appearDuration?: number; hoverDuration?: number};
   "padAngle"?: number;
   "pieLabels"?: boolean;
+  "yScale"?: "linear" | "log" | "symlog";
  };
  "Checkbox": Omit<BaseProps & SpecialProps, "value" | "label"> & {
   "value"?: boolean;
@@ -608,7 +808,7 @@ interface ComponentProps {
  "DialogBase": Omit<BaseProps & SpecialProps, "open"> & {
   "open"?: boolean;
  };
- "DiffView": Omit<BaseProps & SpecialProps, "original" | "modified" | "language" | "editable" | "layout" | "wrap" | "fitContent" | "hunkActions" | "contextLines" | "expandUnchanged" | "lineNumbers" | "tabSize" | "expansionLines" | "indicators" | "noBackground" | "inline" | "annotations"> & {
+ "DiffView": Omit<BaseProps & SpecialProps, "original" | "modified" | "language" | "editable" | "layout" | "wrap" | "fitContent" | "scrollPastEnd" | "hunkActions" | "contextLines" | "expandUnchanged" | "lineNumbers" | "tabSize" | "expansionLines" | "indicators" | "noBackground" | "inline" | "annotations" | "keepScrollbars" | "noScrollbars"> & {
   "original"?: string;
   "modified"?: string;
   "language"?: string;
@@ -616,6 +816,7 @@ interface ComponentProps {
   "layout"?: "split" | "unified";
   "wrap"?: boolean;
   "fitContent"?: boolean;
+  "scrollPastEnd"?: boolean;
   "hunkActions"?: boolean;
   "contextLines"?: number;
   "expandUnchanged"?: boolean;
@@ -626,19 +827,22 @@ interface ComponentProps {
   "noBackground"?: boolean;
   "inline"?: "wordAlt" | "word" | "wordLine" | "char" | "none";
   "annotations"?: unknown;
+  "keepScrollbars"?: boolean;
+  "noScrollbars"?: boolean;
  };
  "Divider": Omit<BaseProps & SpecialProps, never> & {
  };
  "EditableText": Omit<BaseProps & SpecialProps, "value"> & {
   "value"?: string;
  };
- "Editor": Omit<BaseProps & SpecialProps, "value" | "language" | "readOnly" | "lineNumbers" | "softWrap" | "tabSize" | "placeholder" | "label" | "fitContent" | "onState" | "onEdit" | "onAction" | "action" | "onCompletionRequest" | "onHoverRequest" | "completions" | "hover" | "diagnostics" | "inlays" | "diffBase"> & {
+ "Editor": Omit<BaseProps & SpecialProps, "value" | "language" | "readOnly" | "lineNumbers" | "softWrap" | "tabSize" | "scrollMargin" | "placeholder" | "label" | "fitContent" | "onState" | "onEdit" | "onAction" | "action" | "onCompletionRequest" | "onHoverRequest" | "completions" | "hover" | "diagnostics" | "inlays" | "diffBase" | "scrollbarStyle" | "keepScrollbars" | "noScrollbars" | "noPointerHover" | "noDefinitionClick" | "noDefinitionLink"> & {
   "value"?: string;
   "language"?: string;
   "readOnly"?: boolean;
   "lineNumbers"?: boolean | "on" | "off" | "none" | "false" | "relative";
   "softWrap"?: boolean;
   "tabSize"?: number;
+  "scrollMargin"?: number;
   "placeholder"?: string;
   "label"?: string;
   "fitContent"?: boolean;
@@ -653,6 +857,12 @@ interface ComponentProps {
   "diagnostics"?: EditorDiagnostics;
   "inlays"?: EditorInlays;
   "diffBase"?: string;
+  "scrollbarStyle"?: ScrollbarStyle;
+  "keepScrollbars"?: boolean;
+  "noScrollbars"?: boolean;
+  "noPointerHover"?: boolean;
+  "noDefinitionClick"?: boolean;
+  "noDefinitionLink"?: boolean;
  };
  "Field": Omit<BaseProps & SpecialProps, "label"> & {
   "label"?: string;
@@ -693,12 +903,15 @@ interface ComponentProps {
   "href"?: string;
   "text"?: string;
  };
- "List": Omit<BaseProps & SpecialProps, "items" | "value" | "followEnd" | "height" | "onReorder" | "selection" | "onSelectionChange" | "dragSelect" | "menuKeepsSelection"> & {
+ "List": Omit<BaseProps & SpecialProps, "items" | "value" | "nearEnd" | "onEndReached" | "followEnd" | "height" | "onReorder" | "moveAnimation" | "selection" | "onSelectionChange" | "dragSelect" | "menuKeepsSelection"> & {
   "items"?: unknown;
   "value"?: unknown;
+  "nearEnd"?: number;
+  "onEndReached"?: (last: number) => unknown;
   "followEnd"?: boolean;
   "height"?: number;
   "onReorder"?: Handler;
+  "moveAnimation"?: Animation;
   "selection"?: (string | number)[];
   "onSelectionChange"?: (keys: (string | number)[]) => unknown;
   "dragSelect"?: boolean;
@@ -736,7 +949,7 @@ interface ComponentProps {
   "value"?: number;
   "min"?: number;
   "max"?: number;
-  "levels"?: unknown;
+  "levels"?: MeterLevels;
  };
  "Modal": Omit<BaseProps & SpecialProps, "open"> & {
   "open"?: boolean;
@@ -747,14 +960,21 @@ interface ComponentProps {
   "max"?: number;
   "step"?: number;
  };
- "Outline": Omit<BaseProps & SpecialProps, "items" | "open"> & {
+ "Outline": Omit<BaseProps & SpecialProps, "items" | "open" | "nearEnd" | "onEndReached" | "moveAnimation"> & {
   "items"?: unknown;
   "open"?: unknown;
+  "nearEnd"?: number;
+  "onEndReached"?: (last: number) => unknown;
+  "moveAnimation"?: Animation;
  };
- "OutlineTable": Omit<BaseProps & SpecialProps, "items" | "columns" | "open"> & {
+ "OutlineTable": Omit<BaseProps & SpecialProps, "items" | "columns" | "open" | "nearEnd" | "onEndReached" | "rowHeight" | "moveAnimation"> & {
   "items"?: unknown;
   "columns"?: unknown;
   "open"?: unknown;
+  "nearEnd"?: number;
+  "onEndReached"?: (last: number) => unknown;
+  "rowHeight"?: number;
+  "moveAnimation"?: Animation;
  };
  "Overlay": Omit<BaseProps & SpecialProps, never> & {
  };
@@ -778,6 +998,12 @@ interface ComponentProps {
  "PrimaryButton": Omit<BaseProps & SpecialProps, "text" | "href"> & {
   "text"?: string;
   "href"?: string;
+ };
+ "PrimarySplitButton": Omit<BaseProps & SpecialProps, "text" | "href" | "menu" | "popoverMenuButton"> & {
+  "text"?: string;
+  "href"?: string;
+  "menu"?: MenuItem[];
+  "popoverMenuButton"?: unknown;
  };
  "Progress": Omit<BaseProps & SpecialProps, "value"> & {
   "value"?: number;
@@ -805,15 +1031,16 @@ interface ComponentProps {
   "max"?: number;
  };
  "RichText": Omit<BaseProps & SpecialProps, "spans"> & {
-  "spans"?: unknown;
+  "spans"?: TextSpan[];
  };
- "RichTextEditor": Omit<BaseProps & SpecialProps, "value" | "format" | "readOnly" | "placeholder" | "label" | "noMarkdown" | "action" | "onState" | "onAction"> & {
+ "RichTextEditor": Omit<BaseProps & SpecialProps, "value" | "format" | "readOnly" | "placeholder" | "label" | "noMarkdown" | "noScrollbar" | "action" | "onState" | "onAction"> & {
   "value"?: string;
   "format"?: "plain" | "markdown" | "html";
   "readOnly"?: boolean;
   "placeholder"?: string;
   "label"?: string;
   "noMarkdown"?: boolean;
+  "noScrollbar"?: boolean;
   "action"?: RichTextAction;
   "onState"?: (state: RichTextState) => unknown;
   "onAction"?: (result: EditorActionResult) => unknown;
@@ -884,6 +1111,12 @@ interface ComponentProps {
  "Split": Omit<BaseProps & SpecialProps, "size"> & {
   "size"?: number;
  };
+ "SplitButton": Omit<BaseProps & SpecialProps, "text" | "href" | "menu" | "popoverMenuButton"> & {
+  "text"?: string;
+  "href"?: string;
+  "menu"?: MenuItem[];
+  "popoverMenuButton"?: unknown;
+ };
  "SplitPercent": Omit<BaseProps & SpecialProps, "size"> & {
   "size"?: number;
  };
@@ -911,10 +1144,14 @@ interface ComponentProps {
  "SwitchBase": Omit<BaseProps & SpecialProps, "value"> & {
   "value"?: boolean;
  };
- "Table": Omit<BaseProps & SpecialProps, "columns" | "items" | "value" | "sort" | "sortBy" | "headerMenu" | "columnLayout" | "selection" | "onSelectionChange" | "dragSelect" | "cellSelect" | "cells" | "onCellsChange" | "cellMenu" | "onCellMenu" | "menuKeepsSelection"> & {
+ "Table": Omit<BaseProps & SpecialProps, "columns" | "items" | "value" | "nearEnd" | "onEndReached" | "rowHeight" | "moveAnimation" | "sort" | "sortBy" | "headerMenu" | "columnLayout" | "selection" | "onSelectionChange" | "dragSelect" | "cellSelect" | "cells" | "onCellsChange" | "cellMenu" | "onCellMenu" | "menuKeepsSelection"> & {
   "columns"?: (string | TableColumn)[];
   "items"?: unknown;
   "value"?: unknown;
+  "nearEnd"?: number;
+  "onEndReached"?: (last: number) => unknown;
+  "rowHeight"?: number;
+  "moveAnimation"?: Animation;
   "sort"?: unknown;
   "sortBy"?: SortOrder[];
   "headerMenu"?: MenuItem[];
@@ -1016,9 +1253,11 @@ interface ComponentProps {
  };
  "ToggleGroup": Omit<BaseProps & SpecialProps, never> & {
  };
- "TokenField": Omit<BaseProps & SpecialProps, "value" | "suggestions"> & {
+ "TokenField": Omit<BaseProps & SpecialProps, "value" | "suggestions" | "query" | "onQueryChange"> & {
   "value"?: unknown;
   "suggestions"?: unknown;
+  "query"?: string;
+  "onQueryChange"?: (query: string) => unknown;
  };
  "Toolbar": Omit<BaseProps & SpecialProps, never> & {
  };
