@@ -1,128 +1,119 @@
-<bar protocol-version="0" min-app-version="0.3.0" id="antigravity" title="Antigravity" version="1.0.0"
+<bar protocol-version="0" min-app-version="0.3.0" id="antigravity" title="Antigravity" version="1.1.0"
      category="ai" license="AGPL-3.0-only" homepage="https://github.com/imwarn/metrix.bar"
      description="Monitor Antigravity model quotas, reset countdowns, and local usage trends."
      refresh="5m" material="glass" placements="menubar" open-mode="flyout" window-style="standard"
      widget="true" notch="true"
      icon="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22currentColor%22%20stroke-width%3D%221.8%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M12%202.5%2014.4%209.6%2021.5%2012%2014.4%2014.4%2012%2021.5%209.6%2014.4%202.5%2012%209.6%209.6Z%22%2F%3E%3Ccircle%20cx%3D%2218.5%22%20cy%3D%225.5%22%20r%3D%221.3%22%20fill%3D%22currentColor%22%20stroke%3D%22none%22%2F%3E%3C%2Fsvg%3E">
   <permissions>
-    <network origin="https://cloudcode-pa.googleapis.com" />
     <network origin="https://daily-cloudcode-pa.googleapis.com" />
+    <network origin="https://cloudcode-pa.googleapis.com" />
+    <network origin="tls://daily-cloudcode-pa.googleapis.com:443" />
+    <network origin="tls://cloudcode-pa.googleapis.com:443" />
     <network origin="https://oauth2.googleapis.com" />
+    <network origin="https://openidconnect.googleapis.com" />
     <file path="{{ inputs.authFile }}" />
+    <credential service="gemini" account="antigravity" />
   </permissions>
   <inputs>
-    <input name="authFile" type="file" label="Auth JSON File" default="~/.antigravity/auth.json" help="Path to an exported Antigravity / Google OAuth JSON file containing access_token or refresh_token.">
-      <locale lang="zh-Hans" label="认证 JSON 文件" help="已导出的 Antigravity / Google OAuth 认证 JSON 文件路径（包含 access_token 或 refresh_token）。" />
+    <input name="authFile" type="file" label="Auth JSON File (Optional)" help="Optional exported Antigravity / CC Switch auth JSON file. Leave blank to read the agy CLI login from the system Keychain (service: gemini, account: antigravity).">
+      <locale lang="zh-Hans" label="认证 JSON 文件（可选）" help="可选：自定义导出的 Antigravity / CC Switch 认证 JSON。留空时自动从系统钥匙串读取本机 agy CLI 登录凭据（gemini / antigravity）。" />
     </input>
-    <input name="credentialsJSON" type="secret" label="Credentials JSON (Optional)" help="Optional manual JSON override stored in the OS Keychain. Takes priority over Auth JSON File.">
-      <locale lang="zh-Hans" label="凭据 JSON（可选）" help="可选手动覆盖内容，保存在系统钥匙串中，优先级高于本地认证文件。" />
+    <input name="credentialsJSON" type="secret" label="Credentials JSON (Optional)" help="Optional manual JSON override stored in the OS Keychain. Takes priority over Auth JSON File and agy Keychain.">
+      <locale lang="zh-Hans" label="凭据 JSON（可选）" help="可选手动覆盖内容，保存在系统钥匙串中，优先级高于本地认证文件和 agy 钥匙串。" />
     </input>
-    <input name="oauthClientId" type="string" label="OAuth Client ID (Optional)" placeholder="Optional fallback when auth JSON omits client_id" help="Used with refresh_token to renew expired access tokens when client_id is absent from the JSON file.">
-      <locale lang="zh-Hans" label="OAuth Client ID（可选）" help="当认证 JSON 未自带 client_id 时，配合 refresh_token 自动续期使用。" />
+    <input name="oauthClientId" type="string" label="OAuth Client ID (Optional)" placeholder="Defaults to agy installed-app OAuth client ID" help="Used with refresh_token to renew expired access tokens when client_id is absent from the JSON.">
+      <locale lang="zh-Hans" label="OAuth Client ID（可选）" help="当认证 JSON 未自带 client_id 时用于 refresh_token 自动续期；留空默认使用 agy 官方客户端 ID。" />
     </input>
-    <input name="oauthClientSecret" type="secret" label="OAuth Client Secret (Optional)" help="Optional OAuth client_secret stored in Keychain for refresh_token renewal when absent from the JSON file.">
-      <locale lang="zh-Hans" label="OAuth Client Secret（可选）" help="当认证 JSON 未自带 client_secret 时，供 refresh_token 续期使用，保存在系统钥匙串。" />
+    <input name="oauthClientSecret" type="secret" label="OAuth Client Secret (Optional)" help="Optional OAuth client_secret stored in Keychain for background refresh_token renewal.">
+      <locale lang="zh-Hans" label="OAuth Client Secret（可选）" help="可选：用于后台自动续期过期令牌；未填写时直接使用 agy 钥匙串中的有效 access_token。" />
     </input>
-    <input name="endpoint" type="select" label="Cloud Code Endpoint" default="auto" help="Select the Cloud Code Assist backend host or keep Auto fallback.">
-      <locale lang="zh-Hans" label="Cloud Code 接口端点" help="选择 Cloud Code Assist 后端地址，默认自动回退。" />
-      <option value="auto" label="Auto (Production -> Daily)"><locale lang="zh-Hans" label="自动（生产优先，失败回退 Daily）" /></option>
-      <option value="prod" label="Production (cloudcode-pa.googleapis.com)"><locale lang="zh-Hans" label="生产环境（cloudcode-pa.googleapis.com）" /></option>
+    <input name="endpoint" type="select" label="Cloud Code Endpoint" default="auto" help="Select the Cloud Code Assist backend host. Auto matches agy CLI (daily-cloudcode-pa first).">
+      <locale lang="zh-Hans" label="Cloud Code 接口端点" help="选择 Cloud Code Assist 后端地址，默认与 agy CLI 一致（优先 daily-cloudcode-pa）。" />
+      <option value="auto" label="Auto (Daily -> Production)"><locale lang="zh-Hans" label="自动（Daily 优先，失败回退生产）" /></option>
       <option value="daily" label="Daily (daily-cloudcode-pa.googleapis.com)"><locale lang="zh-Hans" label="Daily 环境（daily-cloudcode-pa.googleapis.com）" /></option>
+      <option value="prod" label="Production (cloudcode-pa.googleapis.com)"><locale lang="zh-Hans" label="生产环境（cloudcode-pa.googleapis.com）" /></option>
     </input>
-    <input name="accountIndex" type="integer" label="Default Account Index" default="0" help="Zero-based index used when the auth JSON contains an accounts array.">
-      <locale lang="zh-Hans" label="默认账号索引" help="当认证 JSON 包含多账号数组时，默认读取的索引（从 0 开始）。" />
+    <input name="accountIndex" type="integer" label="Default Account Index" default="0" help="Zero-based index used when an auth JSON file contains multiple accounts.">
+      <locale lang="zh-Hans" label="默认账号索引" help="当认证 JSON 包含多账号时默认读取的索引（从 0 开始）。" />
     </input>
     <input name="notchActivity" type="bool" label="Warn in the notch when quota is low" default="true" help="Briefly highlight Antigravity in the notch when any active model group drops to 20% or below.">
       <locale lang="zh-Hans" label="额度偏低时在刘海中提醒" help="当任意模型配额组剩余降至 20% 及以下时，在刘海中短暂优先展示 Antigravity。" />
     </input>
   </inputs>
-  <docs><![CDATA[指向已导出的 Antigravity / Google OAuth 认证 JSON 文件（或将 JSON 粘贴到“凭据 JSON”钥匙串字段）。支持单账号与多账号 accounts 数组格式；若文件含 refresh_token 与 OAuth client 信息，access_token 过期时会自动续期。默认仅显示当前账号下包含配额信息的模型，并在“配额分组”与“卡片网格”视图间自由切换。]]></docs>
-  <script apis="shell sqlite clipboard localStorage"><![CDATA[
+  <docs><![CDATA[默认自动读取本机 Antigravity CLI（agy）保存在系统钥匙串（service: gemini, account: antigravity）中的官方登录状态，无需手动导出文件。也支持在输入项中选择自定义认证 JSON（兼容单账号、accounts 数组与 CC Switch agy_accounts.json）或粘贴到“凭据 JSON”。直连 daily-cloudcode-pa.googleapis.com 查询当前账号下有额度的模型与配额桶，支持“配额分组”与“卡片网格”双视图、SQLite 趋势、Notch 与桌面小组件。]]></docs>
+  <script apis="sqlite clipboard localStorage sockets"><![CDATA[
+/**
+ * [INPUT]: 依赖 Metrix.Bar 宿主 $metrix（readCredential/readFile/secret/sqlite/caniuse）、cloudflare:sockets TLS 与 Cloud Code API
+ * [OUTPUT]: 导出 Metrix.Bar Worker（scheduled/render/event），渲染托盘、双视图面板、Notch 与三尺寸桌面小组件
+ * [POS]: dashboards/antigravity 唯一看板源文件，被 Metrix.Bar 直接加载并由 antigravity.test.cjs 做离线单测
+ * [PROTOCOL]: Update this header on change, then check GEMINI.md
+ */
 // SPDX-License-Identifier: AGPL-3.0-only
-// Native UI composition, SQLite trend recording, Notch, and Widget patterns reference
-// official Metrix.Bar AI dashboards (claude-code.bar & codex.bar, AGPL-3.0-only).
+// UI/SQLite/Notch/Widget patterns reference official Metrix.Bar AI dashboards (claude-code.bar & codex.bar, AGPL-3.0-only).
+// Local agy Keychain format (go-keyring-base64:) and daily-cloudcode-pa quota protocol reference cc-switch.
 
 const h = (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity).filter(c => c !== null && c !== undefined && c !== false) });
 const TX = (text, props) => h("Text", props || {}, String(text));
 const TITLE = "Antigravity";
-const ENDPOINTS = { prod: "https://cloudcode-pa.googleapis.com", daily: "https://daily-cloudcode-pa.googleapis.com" };
+const ENDPOINTS = { daily: "https://daily-cloudcode-pa.googleapis.com", prod: "https://cloudcode-pa.googleapis.com" };
+const DEFAULT_OAUTH_CLIENT_ID = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
+const AGY_USER_AGENT = "Metrix.Bar/1.1 (antigravity/cli/1.5.5)";
+const GO_KEYRING_PREFIX = "go-keyring-base64:";
 const K = { muted: "textMuted", hover: "surfaceHover", press: "surfacePressed", track: "border" };
 const CYCLE_SLACK = 15 * 60e3, KEEP_MS = 35 * 864e5, LOW_QUOTA_THRESHOLD = 20;
 
-// -- Icons --
+// -- 图标与双语文案 --
 const svg = (body, fill = false) =>
   `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" ${fill ? 'fill="currentColor"' : 'fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"'}>${body}</svg>`;
 const BRAND = svg(`<path d="M12 2.5 14.4 9.6 21.5 12 14.4 14.4 12 21.5 9.6 14.4 2.5 12 9.6 9.6Z"/><circle cx="18.5" cy="5.5" r="1.3" fill="currentColor" stroke="none"/>`);
 const ICON = {
-  mark: BRAND,
-  sparkle: svg(`<path d="M12 3 14.2 9.8 21 12 14.2 14.2 12 21 9.8 14.2 3 12 9.8 9.8Z"/>`, true),
+  mark: BRAND, sparkle: svg(`<path d="M12 3 14.2 9.8 21 12 14.2 14.2 12 21 9.8 14.2 3 12 9.8 9.8Z"/>`, true),
   bot: svg(`<rect x="4" y="8" width="16" height="11" rx="3"/><path d="M12 4v4M9 13.5h.01M15 13.5h.01M8 4h8"/>`),
   refresh: svg(`<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>`),
   clock: svg(`<circle cx="12" cy="12" r="9.5"/><polyline points="12 6.5 12 12 15.5 14"/>`),
   alert: svg(`<circle cx="12" cy="12" r="9.5"/><path d="M12 7.5v5"/><path d="M12 16h.01"/>`),
   copy: svg(`<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>`),
-  chevronDown: svg(`<path d="m6 9 6 6 6-6"/>`),
-  chevronRight: svg(`<path d="m9 6 6 6-6 6"/>`),
+  chevronDown: svg(`<path d="m6 9 6 6 6-6"/>`), chevronRight: svg(`<path d="m9 6 6 6-6 6"/>`),
 };
-const Icon = (name, size = 14, color = K.muted, extra) =>
-  h("Icon", { svg: ICON[name] || ICON.mark, fontSize: size, width: size, height: size, textColor: color, shrink: 0, ...extra });
-
-// -- Localization --
+const Icon = (name, size = 14, color = K.muted, extra) => h("Icon", { svg: ICON[name] || ICON.mark, fontSize: size, width: size, height: size, textColor: color, shrink: 0, ...extra });
 
 const STRINGS = {
   en: {
-    refresh: "Refresh", copySummary: "Copy summary", copied: "Copied {text}", loading: "Loading Antigravity quotas…",
-    failed: "Couldn’t load quotas", reconnect: "Open dashboard settings to check your auth JSON.", tryAgain: "Try again",
-    noModels: "No models with active quota were returned for this account.", noMatch: "No models match your search.",
-    searchPlaceholder: "Search model name or ID", viewGrouped: "Grouped", viewGrid: "Grid",
-    modelsCount: "{n} models", modelCountOne: "1 model", lowestQuota: "Lowest", nextReset: "Next reset",
-    activeModels: "Quota models", trend: "Quota trend", remaining: "Left", resetUnknown: "Reset time unknown",
-    resetNow: "Soon", updatedAgo: "Updated {time} ago", justNow: "just now", showAll: "Show all {n} models", collapse: "Collapse",
-    authMissing: "Could not read the auth JSON file. Select an exported Antigravity auth JSON in Inputs or paste it into Credentials JSON.",
-    authInvalid: "The auth file is not valid JSON.", authNoToken: "No access_token or refresh_token found in the auth JSON.",
-    refreshNeedsClient: "Access token expired or missing. Provide oauthClientId (and oauthClientSecret if required) in Inputs or auth JSON to renew automatically.",
-    refreshFailed: "OAuth token refresh failed (HTTP {status}). Re-export your auth JSON.",
-    expired: "Authentication expired (HTTP {status}). Refresh or re-export your auth JSON.",
-    rateLimited: "Cloud Code API rate limited this request. Try again shortly.",
-    httpError: "Cloud Code API returned HTTP {status}.", networkError: "Unable to reach Cloud Code API. Check your network or proxy settings.",
-    invalidResp: "Cloud Code API returned an invalid response.",
+    refresh: "Refresh", copySummary: "Copy summary", copied: "Copied {text}", loading: "Loading Antigravity quotas…", failed: "Couldn’t load quotas",
+    reconnect: "Sign in with `agy` and allow Keychain access, or set an auth JSON.", tryAgain: "Try again", noModels: "No models with active quota were returned for this account.",
+    noMatch: "No models match your search.", searchPlaceholder: "Search model name or ID", viewGrouped: "Grouped", viewGrid: "Grid",
+    modelsCount: "{n} models", modelCountOne: "1 model", lowestQuota: "Lowest", nextReset: "Next reset", activeModels: "Quota models", trend: "Quota trend",
+    remaining: "Left", resetUnknown: "Reset time unknown", resetNow: "Soon", updatedNow: "Updated just now", updatedAgo: "Updated {time} ago",
+    showAll: "Show all {n} models", collapse: "Collapse", authInvalid: "The Antigravity credential data is not valid JSON.", authNoToken: "No access_token or refresh_token found in credentials.",
+    authMissing: "Sign in with `agy` first and allow Metrix.Bar to read the Keychain item (gemini / antigravity), or select an exported auth JSON in Inputs.",
+    refreshNeedsClient: "The access_token has expired. Run `agy` once to renew it, or provide OAuth Client Secret in Inputs for automatic renewal.",
+    refreshFailed: "OAuth token refresh failed (HTTP {status}). Run `agy` to sign in again.", expired: "Authentication expired (HTTP {status}). Run `agy` to refresh your login.",
+    rateLimited: "Cloud Code API rate limited this request. Try again shortly.", httpError: "Cloud Code API returned HTTP {status}.",
+    networkError: "Unable to reach Cloud Code API. Check your network or proxy settings.", invalidResp: "Cloud Code API returned an invalid response.",
   },
   "zh-Hans": {
-    refresh: "刷新", copySummary: "复制额度摘要", copied: "已复制 {text}", loading: "正在加载 Antigravity 模型额度…",
-    failed: "无法加载额度", reconnect: "打开看板设置检查认证 JSON 文件或凭据。", tryAgain: "重试",
-    noModels: "当前账号未返回包含额度的模型。", noMatch: "没有匹配的模型，请调整搜索关键词。",
-    searchPlaceholder: "搜索模型名称或 ID", viewGrouped: "配额分组", viewGrid: "卡片网格",
-    modelsCount: "{n} 个模型", modelCountOne: "1 个模型", lowestQuota: "最低剩余", nextReset: "最近重置",
-    activeModels: "有额度模型", trend: "剩余趋势", remaining: "剩余", resetUnknown: "重置时间未知",
-    resetNow: "即将重置", updatedAgo: "{time}前更新", justNow: "刚刚", showAll: "展开全部 {n} 个模型", collapse: "收起",
-    authMissing: "无法读取认证 JSON 文件。请在看板设置中选择已导出的 Antigravity 认证文件，或粘贴到“凭据 JSON”。",
-    authInvalid: "认证内容不是有效的 JSON。", authNoToken: "认证 JSON 中未找到 access_token 或 refresh_token。",
-    refreshNeedsClient: "access_token 缺失或已过期。请在认证 JSON 或看板设置中补充 OAuth Client ID（及所需 Secret）以自动续期。",
-    refreshFailed: "OAuth 令牌续期失败（HTTP {status}），请重新导出认证 JSON。",
-    expired: "认证已失效（HTTP {status}），请重新导出认证 JSON 或配置自动续期。",
-    rateLimited: "Cloud Code 接口请求受限（HTTP 429），请稍后重试。",
-    httpError: "Cloud Code 接口返回 HTTP {status}。", networkError: "无法连接 Cloud Code 接口，请检查网络或代理设置。",
-    invalidResp: "Cloud Code 接口返回了无法解析的数据。",
+    refresh: "刷新", copySummary: "复制额度摘要", copied: "已复制 {text}", loading: "正在加载 Antigravity 模型额度…", failed: "无法加载额度",
+    reconnect: "请先使用 `agy` 登录并允许访问系统钥匙串，或在设置中指定认证 JSON。", tryAgain: "重试", noModels: "当前账号未返回包含额度的模型。",
+    noMatch: "没有匹配的模型，请调整搜索关键词。", searchPlaceholder: "搜索模型名称或 ID", viewGrouped: "配额分组", viewGrid: "卡片网格",
+    modelsCount: "{n} 个模型", modelCountOne: "1 个模型", lowestQuota: "最低剩余", nextReset: "最近重置", activeModels: "有额度模型", trend: "剩余趋势",
+    remaining: "剩余", resetUnknown: "重置时间未知", resetNow: "即将重置", updatedNow: "刚刚更新", updatedAgo: "{time}前更新",
+    showAll: "展开全部 {n} 个模型", collapse: "收起", authInvalid: "Antigravity 认证数据不是有效的 JSON。", authNoToken: "凭据中未找到 access_token 或 refresh_token。",
+    authMissing: "无法读取本机 agy 钥匙串凭据（gemini / antigravity）或认证文件。请先运行 `agy` 登录并允许钥匙串访问，或在看板设置中填写认证 JSON。",
+    refreshNeedsClient: "当前 access_token 已过期。请运行一次 `agy` 刷新本机令牌，或在看板设置中补充 OAuth Client Secret 以启用后台自动续期。",
+    refreshFailed: "OAuth 令牌续期失败（HTTP {status}），请重新运行 `agy` 登录。", expired: "登录认证已失效（HTTP {status}），请运行 `agy` 重新登录或刷新令牌。",
+    rateLimited: "Cloud Code 接口请求受限（HTTP 429），请稍后重试。", httpError: "Cloud Code 接口返回 HTTP {status}。",
+    networkError: "无法连接 Cloud Code 接口，请检查网络或代理设置。", invalidResp: "Cloud Code 接口返回了无法解析的数据。",
   },
 };
-
-function pickLanguage() {
-  for (const tag of (typeof navigator !== "undefined" && navigator.languages) || []) {
-    if (String(tag).toLowerCase().startsWith("zh")) return "zh-Hans";
-    if (String(tag).toLowerCase().startsWith("en")) return "en";
-  }
-  return "zh-Hans";
-}
-const T = STRINGS[pickLanguage()];
+const T = STRINGS[(() => { for (const tag of (typeof navigator !== "undefined" && navigator.languages) || []) { if (String(tag).toLowerCase().startsWith("zh")) return "zh-Hans"; if (String(tag).toLowerCase().startsWith("en")) return "en"; } return "zh-Hans"; })()];
 const fill = (s, v) => String(s).replace(/\{(\w+)\}/g, (_, k) => (v && v[k] != null ? String(v[k]) : ""));
 
-// -- Formatting & Color Semantics --
-
+// -- 格式化与语义色 --
 const finite = v => typeof v === "number" && Number.isFinite(v);
 const clampPct = v => Math.max(0, Math.min(100, Math.round(v)));
 const pctText = v => (finite(v) ? `${clampPct(v)}%` : "—");
-const quotaTone = leftPct => (!finite(leftPct) ? "textMuted" : leftPct <= 10 ? "danger" : leftPct <= 30 ? "warning" : "success");
-const widgetTone = leftPct => (!finite(leftPct) ? "secondary" : leftPct <= 10 ? "error" : leftPct <= 30 ? "warning" : "success");
+const quotaTone = v => (!finite(v) ? "textMuted" : v <= 10 ? "danger" : v <= 30 ? "warning" : "success");
+const widgetTone = v => (!finite(v) ? "secondary" : v <= 10 ? "error" : v <= 30 ? "warning" : "success");
 const pad2 = n => String(n).padStart(2, "0");
 
 function formatResetStamp(ms) {
@@ -130,27 +121,20 @@ function formatResetStamp(ms) {
   const d = new Date(ms);
   return `${d.getFullYear()}/${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
 }
-
 function formatCountdown(ms, now = Date.now()) {
   if (!finite(ms)) return "—";
   const diff = ms - now;
   if (diff <= 0) return T.resetNow;
-  const minsTotal = Math.floor(diff / 60e3);
-  const days = Math.floor(minsTotal / 1440), hours = Math.floor((minsTotal % 1440) / 60), mins = minsTotal % 60;
-  if (days > 0) return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
-  if (hours > 0) return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
-  return `${Math.max(1, mins)}m`;
+  const minsTotal = Math.floor(diff / 60e3), days = Math.floor(minsTotal / 1440), hours = Math.floor((minsTotal % 1440) / 60), mins = minsTotal % 60;
+  return days > 0 ? (hours > 0 ? `${days}d ${hours}h` : `${days}d`) : hours > 0 ? (mins > 0 ? `${hours}h ${mins}m` : `${hours}h`) : `${Math.max(1, mins)}m`;
 }
-
-function formatAge(ts, now = Date.now()) {
+function formatUpdated(ts, now = Date.now()) {
   if (!ts) return "";
   const secs = Math.max(0, Math.floor((now - ts) / 1000));
-  if (secs < 45) return T.justNow;
-  if (secs < 3600) return `${Math.floor(secs / 60)}m`;
-  if (secs < 86400) return `${Math.floor(secs / 3600)}h`;
-  return `${Math.floor(secs / 86400)}d`;
+  if (secs < 45) return T.updatedNow;
+  const time = secs < 3600 ? `${Math.floor(secs / 60)}m` : secs < 86400 ? `${Math.floor(secs / 3600)}h` : `${Math.floor(secs / 86400)}d`;
+  return fill(T.updatedAgo, { time });
 }
-
 function parseTimestamp(raw) {
   if (raw == null || raw === "") return NaN;
   if (typeof raw === "number" && Number.isFinite(raw)) return raw < 1e12 ? raw * 1000 : raw;
@@ -162,82 +146,81 @@ function parseTimestamp(raw) {
   }
   return NaN;
 }
-
-// -- Auth JSON Parsing & OAuth Token Refresh --
-
-function normalizeAccount(entry, idx) {
-  if (!entry || typeof entry !== "object") return null;
-  const nested = entry.token || entry.tokens || entry.credentials || entry.oauth || {};
-  const pick = (...vals) => { for (const v of vals) if (typeof v === "string" && v.trim()) return v.trim(); return ""; };
-  const accessToken = pick(entry.access_token, entry.accessToken, nested.access_token, nested.accessToken);
-  const refreshToken = pick(entry.refresh_token, entry.refreshToken, nested.refresh_token, nested.refreshToken);
-  if (!accessToken && !refreshToken) return null;
-  const projectObj = entry.cloudaicompanionProject || entry.project || nested.project;
-  const projectId = pick(entry.project_id, entry.projectId, typeof projectObj === "string" ? projectObj : projectObj && projectObj.id, nested.project_id, nested.projectId);
-  const expiresAt = parseTimestamp(
-    entry.expires_at ?? entry.expiresAt ?? entry.expired ?? entry.expiry_date ?? entry.expiryDate ??
-    nested.expires_at ?? nested.expiresAt ?? nested.expired ?? nested.expiry_date ?? nested.expiryDate
-  );
-  const email = pick(entry.email, entry.account, entry.userEmail, nested.email);
-  const clientId = pick(entry.client_id, entry.clientId, nested.client_id, nested.clientId);
-  const clientSecret = pick(entry.client_secret, entry.clientSecret, nested.client_secret, nested.clientSecret);
-  const label = email || projectId || `Account #${idx + 1}`;
-  const key = email || projectId || (refreshToken ? `rt:${refreshToken.slice(-8)}` : `at:${accessToken.slice(-8)}`);
-  return { key, label, email, accessToken, refreshToken, expiresAt, projectId, clientId, clientSecret };
+function decodeBase64Utf8(b64) {
+  const bin = atob(String(b64 || "").replace(/\s+/g, "")), bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return typeof TextDecoder === "function" ? new TextDecoder().decode(bytes) : bin;
+}
+function jwtEmail(idToken) {
+  const part = typeof idToken === "string" ? idToken.split(".")[1] : "";
+  if (!part) return "";
+  try {
+    const claims = JSON.parse(decodeBase64Utf8(part.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((part.length + 3) % 4)));
+    return typeof claims.email === "string" ? claims.email.trim() : "";
+  } catch { return ""; }
 }
 
-function parseAuthJSON(raw) {
+// -- 凭据读取（钥匙串 go-keyring-base64 + 认证 JSON）与令牌续期 --
+function decodeCredentialPayload(raw) {
+  const trimmed = String(raw || "").trim();
+  const jsonText = trimmed.startsWith(GO_KEYRING_PREFIX) ? decodeBase64Utf8(trimmed.slice(GO_KEYRING_PREFIX.length)) : trimmed;
   let doc;
-  try { doc = JSON.parse(raw); } catch { throw new Error(T.authInvalid); }
+  try { doc = JSON.parse(jsonText); } catch { throw new Error(T.authInvalid); }
   if (!doc || typeof doc !== "object") throw new Error(T.authInvalid);
-  const list = [];
+  return doc;
+}
+function normalizeAccount(entry, idx) {
+  if (!entry || typeof entry !== "object") return null;
+  const cred = entry.credential && typeof entry.credential === "object" ? entry.credential : entry;
+  const nested = cred.token || cred.tokens || cred.credentials || cred.oauth || {};
+  const pick = (...vals) => { for (const v of vals) if (typeof v === "string" && v.trim()) return v.trim(); return ""; };
+  const accessToken = pick(cred.access_token, cred.accessToken, nested.access_token, nested.accessToken);
+  const refreshToken = pick(cred.refresh_token, cred.refreshToken, nested.refresh_token, nested.refreshToken);
+  if (!accessToken && !refreshToken) return null;
+  const projectObj = cred.cloudaicompanionProject || cred.project || entry.project || nested.project;
+  const projectId = pick(entry.project_id, entry.projectId, cred.project_id, cred.projectId, typeof projectObj === "string" ? projectObj : projectObj && projectObj.id, nested.project_id, nested.projectId);
+  const expiresAt = parseTimestamp(cred.expiry ?? nested.expiry ?? cred.expires_at ?? cred.expiresAt ?? cred.expired ?? cred.expiry_date ?? cred.expiryDate ?? nested.expires_at ?? nested.expiresAt ?? nested.expired ?? nested.expiry_date ?? nested.expiryDate);
+  const idToken = pick(cred.id_token, cred.idToken, nested.id_token, nested.idToken);
+  const email = pick(entry.email, cred.email, cred.id_token_email, entry.account, entry.userEmail, nested.email) || jwtEmail(idToken);
+  const clientId = pick(cred.client_id, cred.clientId, nested.client_id, nested.clientId);
+  const clientSecret = pick(cred.client_secret, cred.clientSecret, nested.client_secret, nested.clientSecret);
+  const label = email || projectId || `Account #${idx + 1}`;
+  const key = email || entry.sub || projectId || (refreshToken ? `rt:${refreshToken.slice(-8)}` : `at:${accessToken.slice(-8)}`);
+  return { key, label, email, accessToken, refreshToken, expiresAt, projectId, clientId, clientSecret };
+}
+function parseAuthJSON(raw) {
+  const doc = decodeCredentialPayload(raw), list = [];
   let defaultIdx = 0;
-  if (Array.isArray(doc)) {
-    doc.forEach((item, i) => { const a = normalizeAccount(item, i); if (a) list.push(a); });
-  } else if (Array.isArray(doc.accounts)) {
-    doc.accounts.forEach((item, i) => { const a = normalizeAccount(item, i); if (a) list.push(a); });
+  const pushAll = arr => arr.forEach((item, i) => { const a = normalizeAccount(item, i); if (a) list.push(a); });
+  if (Array.isArray(doc)) pushAll(doc);
+  else if (Array.isArray(doc.accounts)) {
+    pushAll(doc.accounts);
     if (Number.isInteger(doc.activeIndex) && doc.activeIndex >= 0 && doc.activeIndex < list.length) defaultIdx = doc.activeIndex;
-    else if (typeof doc.activeEmail === "string") {
-      const found = list.findIndex(a => a.email === doc.activeEmail);
-      if (found >= 0) defaultIdx = found;
-    }
-  } else {
-    const single = normalizeAccount(doc, 0);
-    if (single) list.push(single);
-  }
+    else if (typeof doc.activeEmail === "string") { const found = list.findIndex(a => a.email === doc.activeEmail); if (found >= 0) defaultIdx = found; }
+  } else if (doc.accounts && typeof doc.accounts === "object") pushAll(Object.values(doc.accounts));
+  else { const single = normalizeAccount(doc, 0); if (single) list.push(single); }
   if (!list.length) throw new Error(T.authNoToken);
   return { accounts: list, defaultIdx };
 }
-
 async function readAuthAccounts() {
   let raw = "";
   try { raw = $metrix.secret("credentialsJSON") || ""; } catch {}
-  if (!raw.trim()) {
-    const p = String(inputs.authFile || "").trim();
-    if (!p) throw new Error(T.authMissing);
-    try { raw = await $metrix.readFile(p); } catch { throw new Error(T.authMissing); }
-  }
+  if (!raw.trim()) { const p = String(inputs.authFile || "").trim(); if (p) { try { raw = await $metrix.readFile(p); } catch {} } }
+  if (!raw.trim() && typeof $metrix.readCredential === "function") { try { raw = await $metrix.readCredential("gemini", "antigravity"); } catch {} }
   if (!raw || !raw.trim()) throw new Error(T.authMissing);
   return parseAuthJSON(raw);
 }
 
-const tokenCache = new Map();
-
+const tokenCache = new Map(), emailCache = new Map();
 async function refreshAccessToken(account) {
-  const clientId = account.clientId || String(inputs.oauthClientId || "").trim();
+  const clientId = account.clientId || String(inputs.oauthClientId || "").trim() || DEFAULT_OAUTH_CLIENT_ID;
   let clientSecret = account.clientSecret || "";
   if (!clientSecret) { try { clientSecret = ($metrix.secret("oauthClientSecret") || "").trim(); } catch {} }
-  if (!account.refreshToken || !clientId) throw new Error(T.refreshNeedsClient);
-
-  const body = new URLSearchParams({
-    grant_type: "refresh_token", refresh_token: account.refreshToken, client_id: clientId,
-    ...(clientSecret ? { client_secret: clientSecret } : {}),
-  });
+  if (!account.refreshToken || !clientId || !clientSecret) throw new Error(T.refreshNeedsClient);
+  const body = new URLSearchParams({ grant_type: "refresh_token", refresh_token: account.refreshToken, client_id: clientId, client_secret: clientSecret });
   let res;
   try {
-    res = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" }, body: body.toString(),
-    });
+    res = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" }, body: body.toString() });
   } catch { throw new Error(T.networkError); }
   const text = await res.text();
   if (!res.ok) throw new Error(fill(T.refreshFailed, { status: res.status }));
@@ -248,102 +231,205 @@ async function refreshAccessToken(account) {
   tokenCache.set(account.key, next);
   return next.accessToken;
 }
-
 async function resolveAccessToken(account, forceRefresh = false) {
-  const now = Date.now(), margin = 120e3;
+  const now = Date.now(), margin = 60e3;
   if (!forceRefresh) {
     const cached = tokenCache.get(account.key);
     if (cached && cached.accessToken && (!finite(cached.expiresAt) || cached.expiresAt - now > margin)) return cached.accessToken;
     if (account.accessToken && (!finite(account.expiresAt) || account.expiresAt - now > margin)) return account.accessToken;
   }
-  if (account.refreshToken) return refreshAccessToken(account);
+  if (account.refreshToken) {
+    try { return await refreshAccessToken(account); } catch (e) { if (!forceRefresh && account.accessToken) return account.accessToken; throw e; }
+  }
   if (account.accessToken && !forceRefresh) return account.accessToken;
   throw new Error(T.refreshNeedsClient);
 }
+async function fetchUserEmail(accessToken, key) {
+  if (emailCache.has(key)) return emailCache.get(key);
+  try {
+    const res = await fetch("https://openidconnect.googleapis.com/v1/userinfo", { headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" } });
+    if (!res.ok) return "";
+    const d = JSON.parse(await res.text()), mail = typeof d.email === "string" ? d.email.trim() : "";
+    if (mail) emailCache.set(key, mail);
+    return mail;
+  } catch { return ""; }
+}
 
-// -- Cloud Code Assist API & Model Quota Parsing --
-
-function targetOrigins() {
+// -- Cloud Code Assist TLS 传输与模型配额解析 --
+const targetOrigins = () => {
   const pref = String(inputs.endpoint || "auto");
-  return pref === "prod" ? [ENDPOINTS.prod] : pref === "daily" ? [ENDPOINTS.daily] : [ENDPOINTS.prod, ENDPOINTS.daily];
+  return pref === "prod" ? [ENDPOINTS.prod] : pref === "daily" ? [ENDPOINTS.daily] : [ENDPOINTS.daily, ENDPOINTS.prod];
+};
+function concatBytes(chunks) {
+  let total = 0, off = 0;
+  for (const c of chunks) total += c.length;
+  const out = new Uint8Array(total);
+  for (const c of chunks) { out.set(c, off); off += c.length; }
+  return out;
+}
+function findSequence(buf, seq, from = 0) {
+  outer: for (let i = from; i <= buf.length - seq.length; i++) {
+    for (let j = 0; j < seq.length; j++) if (buf[i + j] !== seq[j]) continue outer;
+    return i;
+  }
+  return -1;
+}
+function decodeChunkedBytes(buf) {
+  const crlf = [13, 10], parts = [], dec = new TextDecoder();
+  let pos = 0, complete = false;
+  while (pos < buf.length) {
+    const end = findSequence(buf, crlf, pos);
+    if (end < 0) break;
+    const size = parseInt(dec.decode(buf.subarray(pos, end)).split(";")[0].trim(), 16);
+    if (!Number.isFinite(size) || size < 0) break;
+    if (size === 0) { if (findSequence(buf, crlf, end + 2) >= 0) complete = true; break; }
+    pos = end + 2;
+    if (pos + size + 2 > buf.length) break;
+    parts.push(buf.subarray(pos, pos + size));
+    pos += size + 2;
+  }
+  return { bytes: concatBytes(parts), complete };
+}
+function parseHttpBytes(raw) {
+  const sep = findSequence(raw, [13, 10, 13, 10]), dec = new TextDecoder();
+  if (sep < 0) throw new Error(T.invalidResp);
+  const lines = dec.decode(raw.subarray(0, sep)).split("\r\n"), statusMatch = /^HTTP\/\d(?:\.\d)?\s+(\d{3})/.exec(lines[0] || "");
+  if (!statusMatch) throw new Error(T.invalidResp);
+  const headers = {};
+  for (let i = 1; i < lines.length; i++) { const idx = lines[i].indexOf(":"); if (idx > 0) headers[lines[i].slice(0, idx).trim().toLowerCase()] = lines[i].slice(idx + 1).trim(); }
+  let bodyBytes = raw.subarray(sep + 4), complete = false;
+  if ((headers["transfer-encoding"] || "").toLowerCase().includes("chunked")) {
+    ({ bytes: bodyBytes, complete } = decodeChunkedBytes(bodyBytes));
+  } else if (headers["content-length"] !== undefined) {
+    const cl = Number(headers["content-length"]);
+    if (Number.isFinite(cl) && bodyBytes.length >= cl) { bodyBytes = bodyBytes.subarray(0, cl); complete = true; }
+  }
+  return { status: Number(statusMatch[1]), text: dec.decode(bodyBytes), complete };
+}
+
+let socketsConnect = undefined;
+async function postViaTlsSocket(origin, method, accessToken, payload) {
+  if (socketsConnect === undefined) {
+    socketsConnect = null;
+    try {
+      if (typeof $metrix.caniuse === "function" && (await $metrix.caniuse("sockets"))) {
+        const mod = await import("cloudflare:sockets");
+        if (mod && typeof mod.connect === "function") socketsConnect = mod.connect;
+      }
+    } catch {}
+  }
+  if (!socketsConnect) return null;
+  const hostname = new URL(origin).hostname, enc = new TextEncoder(), bodyBytes = enc.encode(JSON.stringify(payload || {}));
+  const reqHead = `POST /v1internal:${method} HTTP/1.1\r\nHost: ${hostname}\r\nAuthorization: Bearer ${accessToken}\r\nUser-Agent: ${AGY_USER_AGENT}\r\nContent-Type: application/json\r\nAccept: application/json\r\nAccept-Encoding: identity\r\nContent-Length: ${bodyBytes.length}\r\nConnection: close\r\n\r\n`;
+  const sock = socketsConnect({ hostname, port: 443 }, { secureTransport: "on" });
+  const timer = setTimeout(() => { try { sock.close(); } catch {} }, 12000);
+  try {
+    await sock.opened;
+    const writer = sock.writable.getWriter();
+    await writer.write(concatBytes([enc.encode(reqHead), bodyBytes]));
+    writer.releaseLock();
+    const reader = sock.readable.getReader(), chunks = [];
+    let total = 0;
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value) {
+        const chunk = value instanceof Uint8Array ? value : new Uint8Array(value);
+        if ((total += chunk.length) > 8 * 1024 * 1024) throw new Error(T.invalidResp);
+        chunks.push(chunk);
+        const joined = concatBytes(chunks);
+        if (findSequence(joined, [13, 10, 13, 10]) >= 0) { const parsed = parseHttpBytes(joined); if (parsed.complete) return parsed; }
+      }
+    }
+    return parseHttpBytes(concatBytes(chunks));
+  } finally { clearTimeout(timer); try { await sock.close(); } catch {} }
 }
 
 async function postCloudCode(origin, method, accessToken, payload) {
-  const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 12000);
+  let status = 0, text = "";
   try {
-    const res = await fetch(`${origin}/v1internal:${method}`, {
-      method: "POST", signal: controller.signal,
-      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify(payload || {}),
-    });
-    const text = await res.text();
-    if (res.status === 401 || res.status === 403) throw Object.assign(new Error(fill(T.expired, { status: res.status })), { status: res.status });
-    if (res.status === 429) throw Object.assign(new Error(T.rateLimited), { status: 429 });
-    if (!res.ok) throw Object.assign(new Error(fill(T.httpError, { status: res.status })), { status: res.status });
-    try { return JSON.parse(text); } catch { throw new Error(T.invalidResp); }
+    const tlsRes = await postViaTlsSocket(origin, method, accessToken, payload);
+    if (tlsRes) { status = tlsRes.status; text = tlsRes.text; }
+    else {
+      const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 12000);
+      try {
+        const res = await fetch(`${origin}/v1internal:${method}`, {
+          method: "POST", signal: controller.signal,
+          headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", Accept: "application/json" },
+          body: JSON.stringify(payload || {}),
+        });
+        status = res.status; text = await res.text();
+      } finally { clearTimeout(timer); }
+    }
+    let parsed = null;
+    try { parsed = JSON.parse(text); } catch {}
+    const detail = parsed && parsed.error && typeof parsed.error.message === "string" ? parsed.error.message.trim() : "";
+    if (status === 401) throw Object.assign(new Error(fill(T.expired, { status: 401 })), { status: 401 });
+    if (status === 403) throw Object.assign(new Error(detail || fill(T.expired, { status: 403 })), { status: 403 });
+    if (status === 429) throw Object.assign(new Error(T.rateLimited), { status: 429 });
+    if (status < 200 || status >= 300) throw Object.assign(new Error(detail || fill(T.httpError, { status })), { status });
+    if (!parsed || typeof parsed !== "object") throw new Error(T.invalidResp);
+    return parsed;
   } catch (e) {
     if (e && (e.status || e.message === T.invalidResp)) throw e;
-    throw Object.assign(new Error(T.networkError), { network: true });
-  } finally { clearTimeout(timer); }
+    const rawMsg = e && e.message ? String(e.message).replace(/Bearer\s+\S+/gi, "Bearer ***").slice(0, 120) : "";
+    throw Object.assign(new Error(rawMsg ? `${T.networkError} (${rawMsg})` : T.networkError), { network: true });
+  }
 }
 
-function inferFamily(id, name) {
+const inferFamily = (id, name) => {
   const s = `${id} ${name}`.toLowerCase();
-  if (/claude|opus|sonnet|haiku/.test(s)) return "claude";
-  if (/gpt|openai|\bo1\b|\bo3\b|\bo4\b/.test(s)) return "gpt";
-  if (/gemini|argon|carbon|hydrogen|neon/.test(s)) return "gemini";
-  return "other";
-}
-const familyLabel = f => ({ gemini: "Gemini", claude: "Claude", gpt: "GPT", other: "Other" })[f] || "Models";
+  return /claude|opus|sonnet|haiku|^3p-/.test(s) ? "claude" : /gpt|openai|\bo1\b|\bo3\b|\bo4\b/.test(s) ? "gpt" : /gemini|argon|carbon|hydrogen|neon/.test(s) ? "gemini" : "other";
+};
+const familyLabel = f => ({ gemini: "Gemini", claude: "Claude & GPT", gpt: "GPT", other: "Models" })[f] || "Models";
 const prettifyModelId = id => String(id).split(/[-_]+/).filter(Boolean).map(w => (/^xhigh$/i.test(w) ? "XHigh" : w.charAt(0).toUpperCase() + w.slice(1))).join(" ");
+const sortModels = list => list.sort((a, b) => a.leftPct - b.leftPct || (a.resetMs || Infinity) - (b.resetMs || Infinity) || a.displayName.localeCompare(b.displayName));
+const BUCKET_NAMES = { "gemini-5h": "Gemini · 5h", "gemini-weekly": "Gemini · Weekly", "gemini-argon-wtu-weekly": "Gemini 4 Argon · Weekly", "3p-5h": "Claude & GPT · 5h", "3p-weekly": "Claude & GPT · Weekly" };
 
 function parseQuotaModels(raw) {
   if (!raw || typeof raw !== "object") throw new Error(T.invalidResp);
   const entries = [];
-  if (Array.isArray(raw.models)) {
-    for (const m of raw.models) if (m && typeof m === "object") { const id = String(m.id || m.model || m.name || "").trim(); if (id) entries.push([id, m]); }
-  } else if (raw.models && typeof raw.models === "object") {
-    for (const [id, m] of Object.entries(raw.models)) if (m && typeof m === "object") entries.push([id, m]);
-  } else throw new Error(T.invalidResp);
-
+  if (Array.isArray(raw.models)) { for (const m of raw.models) if (m && typeof m === "object") { const id = String(m.id || m.model || m.name || "").trim(); if (id) entries.push([id, m]); } }
+  else if (raw.models && typeof raw.models === "object") { for (const [id, m] of Object.entries(raw.models)) if (m && typeof m === "object") entries.push([id, m]); }
+  else return [];
   const out = [];
   for (const [id, m] of entries) {
     if (m.isInternal === true && !m.displayName) continue;
     const q = m.quotaInfo || m.quota_info;
     if (!q || typeof q !== "object") continue;
-    let remaining = NaN;
-    if (finite(q.remainingFraction)) remaining = q.remainingFraction * 100;
-    else if (finite(q.remaining_fraction)) remaining = q.remaining_fraction * 100;
-    else if (finite(q.remainingPercentage)) remaining = q.remainingPercentage;
-    else if (finite(q.remaining_percentage)) remaining = q.remaining_percentage;
+    let remaining = finite(q.remainingFraction) ? q.remainingFraction * 100 : finite(q.remaining_fraction) ? q.remaining_fraction * 100 : finite(q.remainingPercentage) ? q.remainingPercentage : finite(q.remaining_percentage) ? q.remaining_percentage : NaN;
     const resetMs = parseTimestamp(q.resetTime ?? q.reset_time);
-    // Cloud Code omits remainingFraction when a bucket is exhausted (0%) while resetTime is present.
     if (!finite(remaining) && finite(resetMs)) remaining = 0;
     if (!finite(remaining)) continue;
-    const displayName = String(m.displayName || m.display_name || "").trim() || prettifyModelId(id);
-    const family = inferFamily(id, displayName);
+    const displayName = String(m.displayName || m.display_name || "").trim() || prettifyModelId(id), family = inferFamily(id, displayName);
     out.push({ id, displayName, family, isPrimary: family === "gemini" && /argon|pro|flash/i.test(`${id} ${displayName}`), leftPct: Math.max(0, Math.min(100, remaining)), resetMs });
   }
-  out.sort((a, b) => a.leftPct - b.leftPct || (a.resetMs || Infinity) - (b.resetMs || Infinity) || a.displayName.localeCompare(b.displayName));
-  return out;
+  return sortModels(out);
 }
-
+function parseQuotaSummaryBuckets(raw) {
+  if (!raw || !Array.isArray(raw.groups)) return [];
+  const out = [];
+  for (const grp of raw.groups) for (const b of (grp && Array.isArray(grp.buckets) ? grp.buckets : [])) {
+    const id = String((b && (b.bucketId || b.id)) || "").trim();
+    if (!id) continue;
+    const resetMs = parseTimestamp(b.resetTime), remaining = finite(b.remainingFraction) ? b.remainingFraction * 100 : finite(resetMs) ? 0 : NaN;
+    if (!finite(remaining)) continue;
+    const displayName = BUCKET_NAMES[id] || (grp.displayName ? `${grp.displayName} (${id})` : prettifyModelId(id)), family = inferFamily(id, displayName);
+    out.push({ id, displayName, family, isPrimary: family === "gemini", leftPct: Math.max(0, Math.min(100, remaining)), resetMs });
+  }
+  return sortModels(out);
+}
 function commonTitlePrefix(names) {
   if (!names.length) return "";
   const tokens = names.map(n => n.split(/\s+/)), shared = [];
-  for (let i = 0; i < tokens[0].length; i++) {
-    if (tokens.every(t => t[i] === tokens[0][i])) shared.push(tokens[0][i]);
-    else break;
-  }
+  for (let i = 0; i < tokens[0].length; i++) { if (tokens.every(t => t[i] === tokens[0][i])) shared.push(tokens[0][i]); else break; }
   return shared.join(" ").replace(/[\s(/-]+$/, "");
 }
-
 function buildGroups(models) {
   const groups = [];
   for (const m of models) {
     const rounded = clampPct(m.leftPct);
-    const match = groups.find(g => g.family === m.family && g.rounded === rounded &&
-      ((!finite(g.resetMs) && !finite(m.resetMs)) || (finite(g.resetMs) && finite(m.resetMs) && Math.abs(g.resetMs - m.resetMs) <= 120e3)));
+    const match = groups.find(g => g.family === m.family && g.rounded === rounded && ((!finite(g.resetMs) && !finite(m.resetMs)) || (finite(g.resetMs) && finite(m.resetMs) && Math.abs(g.resetMs - m.resetMs) <= 120e3)));
     if (match) match.models.push(m);
     else groups.push({ key: `${m.family}:${finite(m.resetMs) ? Math.round(m.resetMs / 120e3) : "none"}:${rounded}`, family: m.family, rounded, leftPct: m.leftPct, resetMs: m.resetMs, models: [m] });
   }
@@ -351,27 +437,37 @@ function buildGroups(models) {
     g.title = g.models.length === 1 ? g.models[0].displayName : (commonTitlePrefix(g.models.map(m => m.displayName)) || familyLabel(g.family));
     g.seriesKey = `${g.family}:${g.title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
   }
-  groups.sort((a, b) => a.leftPct - b.leftPct || (a.resetMs || Infinity) - (b.resetMs || Infinity) || a.title.localeCompare(b.title));
-  return groups;
+  return groups.sort((a, b) => a.leftPct - b.leftPct || (a.resetMs || Infinity) - (b.resetMs || Infinity) || a.title.localeCompare(b.title));
 }
-
+function parseIneligibleReason(resp) {
+  if (!resp || typeof resp !== "object") return "";
+  const allowed = Array.isArray(resp.allowedTiers) ? resp.allowedTiers : [], ineligible = Array.isArray(resp.ineligibleTiers) ? resp.ineligibleTiers : [];
+  const hasFree = (resp.currentTier && resp.currentTier.id === "free-tier") || allowed.some(t => t && t.id === "free-tier");
+  if (resp.gcpManaged !== true && !hasFree) {
+    const hit = ineligible.find(t => t && t.tierId === "free-tier" && typeof t.reasonMessage === "string" && t.reasonMessage.trim());
+    if (hit) return hit.reasonMessage.trim();
+  }
+  if (resp.currentTier) return "";
+  const first = ineligible.find(t => t && typeof t.reasonMessage === "string" && t.reasonMessage.trim());
+  return first ? first.reasonMessage.trim() : "";
+}
 function parseTier(resp) {
   if (!resp || typeof resp !== "object") return "";
-  const s = String((resp.paidTier && (resp.paidTier.name || resp.paidTier.id)) || (resp.currentTier && (resp.currentTier.name || resp.currentTier.id)) || "").trim();
-  if (!s) return "";
-  if (/ultra/i.test(s)) return "Ultra";
-  if (/pro/i.test(s)) return "Pro";
-  if (/enterprise/i.test(s)) return "Enterprise";
-  if (/standard/i.test(s)) return "Standard";
-  if (/free/i.test(s)) return "Free";
-  return s.slice(0, 16);
+  const fmt = (name, id) => {
+    let s = String(name || "").trim().replace(/^google\s+(?=ai\s+\S)/i, "");
+    const v = id === "g1-ultra-lite-tier" ? "5x" : id === "g1-ultra-tier" ? "20x" : "";
+    return v && /ultra/i.test(s) && !/(5x|20x)/i.test(s) ? `${s} ${v}` : s;
+  };
+  if (resp.paidTier && typeof resp.paidTier.name === "string" && resp.paidTier.name.trim()) return fmt(resp.paidTier.name, resp.paidTier.id);
+  const id = resp.currentTier && resp.currentTier.id;
+  if (id === "free-tier") return "Free";
+  if (id === "standard-tier") return "Paid";
+  return resp.currentTier && typeof resp.currentTier.name === "string" && resp.currentTier.name.trim() ? fmt(resp.currentTier.name, id) : "";
 }
 
-// -- Persistent SQLite Quota History --
-
+// -- SQLite 历史趋势存储 --
 let db = null;
 const trends = {};
-
 async function openDatabase() {
   if (db !== null) return db || null;
   db = false;
@@ -384,7 +480,6 @@ async function openDatabase() {
   } catch {}
   return db || null;
 }
-
 async function recordSamples(accountKey, groups) {
   const conn = await openDatabase();
   if (!conn || !groups.length) return;
@@ -404,13 +499,11 @@ async function recordSamples(accountKey, groups) {
   } catch {}
 }
 
-// -- Worker State & Refresh Pipeline --
-
+// -- Worker 状态与刷新管线 --
 let inputs = {}, accounts = [], activeIdx = null, lastConfiguredIdx = null;
 let snapshot = null, error = "", inflight = null, viewMode = "grouped", search = "", selectedId = "";
 let expandedGroups = new Set(), activity;
 const alertedCycles = {};
-
 try {
   const savedView = localStorage.getItem("antigravity.viewMode");
   if (savedView === "grid" || savedView === "grouped") viewMode = savedView;
@@ -420,15 +513,12 @@ try {
 
 function updateNotchActivity(groups) {
   if (activity && activity.expiresAt <= Date.now()) activity = undefined;
-  if (inputs.notchActivity === false || !groups.length) return;
-  const urgent = groups[0];
-  if (urgent.leftPct > LOW_QUOTA_THRESHOLD) return;
-  const cycle = finite(urgent.resetMs) ? Math.round(urgent.resetMs / 60e3) : 0;
+  if (inputs.notchActivity === false || !groups.length || groups[0].leftPct > LOW_QUOTA_THRESHOLD) return;
+  const urgent = groups[0], cycle = finite(urgent.resetMs) ? Math.round(urgent.resetMs / 60e3) : 0;
   if (alertedCycles[urgent.seriesKey] === cycle) return;
   alertedCycles[urgent.seriesKey] = cycle;
   activity = { id: `${urgent.seriesKey}:${cycle}:${clampPct(urgent.leftPct)}`, expiresAt: Date.now() + 8000 };
 }
-
 async function fetchAccountSnapshot(account) {
   let lastErr = null;
   for (const origin of targetOrigins()) {
@@ -437,17 +527,26 @@ async function fetchAccountSnapshot(account) {
       try {
         let projectId = account.projectId || "", plan = "";
         try {
-          const assist = await postCloudCode(origin, "loadCodeAssist", token, {
-            metadata: { ideType: "ANTIGRAVITY" }, ...(projectId ? { cloudaicompanionProject: projectId } : {}),
-          });
+          const assist = await postCloudCode(origin, "loadCodeAssist", token, { metadata: { ideType: "ANTIGRAVITY" }, ...(projectId ? { cloudaicompanionProject: projectId } : {}) });
+          const ineligible = parseIneligibleReason(assist);
+          if (ineligible) throw Object.assign(new Error(ineligible), { status: 403 });
           if (!projectId && assist && assist.cloudaicompanionProject) {
-            projectId = typeof assist.cloudaicompanionProject === "string" ? assist.cloudaicompanionProject : String(assist.cloudaicompanionProject.id || "");
+            const p = assist.cloudaicompanionProject;
+            projectId = typeof p === "string" ? p.trim() : String((p && (p.id || p.projectId)) || "").trim();
           }
           plan = parseTier(assist);
-        } catch (e) { if (e && e.status === 401) throw e; }
-        const resp = await postCloudCode(origin, "fetchAvailableModels", token, projectId ? { project: projectId } : {});
-        const models = parseQuotaModels(resp), groups = buildGroups(models);
-        return { accountKey: account.key, accountLabel: account.label, plan, origin, models, groups, fetchedAt: Date.now() };
+        } catch (e) { if (e && (e.status === 401 || e.status === 403)) throw e; }
+        const reqBody = projectId ? { project: projectId } : {};
+        let models = [];
+        try { models = parseQuotaModels(await postCloudCode(origin, "fetchAvailableModels", token, reqBody)); }
+        catch (e) { if (e && (e.status === 401 || e.status === 429)) throw e; lastErr = e; }
+        if (!models.length) {
+          try { models = parseQuotaSummaryBuckets(await postCloudCode(origin, "retrieveUserQuotaSummary", token, reqBody)); }
+          catch (e) { if (!lastErr) lastErr = e; if (e && (e.status === 401 || e.status === 403 || e.status === 429)) throw e; }
+        }
+        if (!models.length && lastErr) throw lastErr;
+        const email = account.email || (await fetchUserEmail(token, account.key));
+        return { accountKey: account.key, accountLabel: email || account.label, plan, origin, models, groups: buildGroups(models), fetchedAt: Date.now() };
       } catch (e) {
         if (e && e.status === 401 && attempt === 0 && account.refreshToken) { token = await resolveAccessToken(account, true); continue; }
         lastErr = e;
@@ -458,37 +557,27 @@ async function fetchAccountSnapshot(account) {
   }
   throw lastErr || new Error(T.networkError);
 }
-
 async function load() {
   const parsed = await readAuthAccounts();
   accounts = parsed.accounts;
   const rawIdx = inputs.accountIndex;
   const configuredIdx = rawIdx !== undefined && rawIdx !== null && rawIdx !== "" && Number.isInteger(Number(rawIdx)) ? Number(rawIdx) : null;
-  if (configuredIdx !== null && configuredIdx !== lastConfiguredIdx) {
-    lastConfiguredIdx = configuredIdx;
-    if (activeIdx === null || configuredIdx !== 0) activeIdx = configuredIdx;
-  }
+  if (configuredIdx !== null && configuredIdx !== lastConfiguredIdx) { lastConfiguredIdx = configuredIdx; if (activeIdx === null || configuredIdx !== 0) activeIdx = configuredIdx; }
   if (activeIdx === null || activeIdx < 0 || activeIdx >= accounts.length) {
-    const fallback = configuredIdx && configuredIdx > 0 ? configuredIdx : parsed.defaultIdx;
-    activeIdx = Math.max(0, Math.min(accounts.length - 1, fallback));
+    activeIdx = Math.max(0, Math.min(accounts.length - 1, configuredIdx && configuredIdx > 0 ? configuredIdx : parsed.defaultIdx));
   }
   const next = await fetchAccountSnapshot(accounts[activeIdx] || accounts[0]);
   snapshot = next;
   await recordSamples(next.accountKey, next.groups);
   updateNotchActivity(next.groups);
 }
-
 function refresh() {
   if (inflight) return inflight;
-  inflight = load()
-    .then(() => { error = ""; })
-    .catch(e => { error = String((e && e.message) || e); })
-    .finally(() => { inflight = null; $metrix.invalidate(); });
+  inflight = load().then(() => { error = ""; }).catch(e => { error = String((e && e.message) || e); }).finally(() => { inflight = null; $metrix.invalidate(); });
   $metrix.invalidate();
   return inflight;
 }
 const launchRefresh = () => { void refresh(); };
-
 async function copyText(str) {
   try {
     if (typeof navigator !== "undefined" && navigator.clipboard && typeof ClipboardItem === "function") {
@@ -497,20 +586,13 @@ async function copyText(str) {
     if (typeof $metrix.toast === "function") $metrix.toast(fill(T.copied, { text: str }));
   } catch {}
 }
+const buildSummaryText = () => (snapshot && snapshot.groups.length ? snapshot.groups.map(g => `${g.title}: ${pctText(g.leftPct)} (${formatCountdown(g.resetMs)})`).join(" | ") : TITLE);
 
-const buildSummaryText = () =>
-  snapshot && snapshot.groups.length
-    ? snapshot.groups.map(g => `${g.title}: ${pctText(g.leftPct)} (${formatCountdown(g.resetMs)})`).join(" | ")
-    : TITLE;
-
-// -- Native Panel UI --
-
-function IconButton(name, label, onClick, busy = false) {
-  return h("Column", {
-    width: 28, height: 28, center: true, radius: 7, shrink: 0, label, tooltip: label, cursor: "pointer",
-    hover: { background: K.hover }, pressed: { background: K.press }, onClick,
-  }, Icon(name, 15, K.muted, busy ? { keyframes: { duration: 900, repeat: -1, ease: "linear", frames: [{ at: 0, rotate: 0 }, { at: 1, rotate: 360 }] } } : null));
-}
+// -- 原生面板组件 --
+const IconButton = (name, label, onClick, busy = false) => h("Column", {
+  width: 28, height: 28, center: true, radius: 7, shrink: 0, label, tooltip: label, cursor: "pointer",
+  hover: { background: K.hover }, pressed: { background: K.press }, onClick,
+}, Icon(name, 15, K.muted, busy ? { keyframes: { duration: 900, repeat: -1, ease: "linear", frames: [{ at: 0, rotate: 0 }, { at: 1, rotate: 360 }] } } : null));
 
 function Header() {
   const plan = snapshot && snapshot.plan, acct = snapshot && snapshot.accountLabel;
@@ -524,32 +606,26 @@ function Header() {
     IconButton("copy", T.copySummary, () => copyText(buildSummaryText())),
     IconButton("refresh", T.refresh, launchRefresh, inflight !== null));
 }
-
 function SummaryStrip(models, groups) {
-  const lowest = groups[0];
-  const soonest = models.filter(m => finite(m.resetMs)).sort((a, b) => a.resetMs - b.resetMs)[0];
-  const tile = (label, value, color = "text") =>
-    h("Column", { gap: 2, padding: [8, 10], radius: 8, background: K.hover, minWidth: 0 },
-      TX(label, { fontSize: 11, textColor: K.muted, singleLine: true }),
-      TX(value, { fontSize: 16, fontWeight: 650, textColor: color, fontFeatures: "tnum", singleLine: true }));
+  const lowest = groups[0], soonest = models.filter(m => finite(m.resetMs)).sort((a, b) => a.resetMs - b.resetMs)[0];
+  const tile = (label, value, color = "text") => h("Column", { gap: 2, padding: [8, 10], radius: 8, background: K.hover, minWidth: 0 },
+    TX(label, { fontSize: 11, textColor: K.muted, singleLine: true }),
+    TX(value, { fontSize: 16, fontWeight: 650, textColor: color, fontFeatures: "tnum", singleLine: true }));
   return h("Grid", { columns: 3, gap: 8, fillWidth: true },
     tile(T.lowestQuota, lowest ? pctText(lowest.leftPct) : "—", lowest ? quotaTone(lowest.leftPct) : K.muted),
     tile(T.activeModels, String(models.length)),
     tile(T.nextReset, soonest ? formatCountdown(soonest.resetMs) : "—"));
 }
-
-function QuotaBar(leftPct) {
+const QuotaBar = leftPct => {
   const pct = Math.max(0, Math.min(100, leftPct));
   return h("Box", { height: 6, radius: 3, background: K.track, fillWidth: true },
     pct > 0 ? h("Box", { absolute: true, top: 0, left: 0, height: 6, radius: 3, widthPercent: Math.max(pct, 2), background: quotaTone(leftPct) }) : null);
-}
-
+};
 function ModelCard(m) {
   const active = selectedId === m.id, tone = quotaTone(m.leftPct);
   return h("Column", {
     key: `card-${m.id}`, gap: 8, padding: [11, 12], radius: 10, background: "surface",
-    border: [1, active ? "accent" : "border"], minWidth: 0, fillWidth: true, cursor: "pointer",
-    hover: { background: K.hover },
+    border: [1, active ? "accent" : "border"], minWidth: 0, fillWidth: true, cursor: "pointer", hover: { background: K.hover },
     onClick: () => { selectedId = m.id; void copyText(m.id); $metrix.invalidate(); },
   },
     h("Row", { gap: 6, alignItems: "center", fillWidth: true, minWidth: 0 },
@@ -565,10 +641,8 @@ function ModelCard(m) {
       h("Spacer"),
       TX(formatCountdown(m.resetMs), { fontSize: 11, fontWeight: 500, textColor: K.muted, fontFeatures: "tnum", shrink: 0 })));
 }
-
 function GroupCard(g) {
-  const tone = quotaTone(g.leftPct), expanded = expandedGroups.has(g.key);
-  const visible = expanded ? g.models : g.models.slice(0, 4);
+  const tone = quotaTone(g.leftPct), expanded = expandedGroups.has(g.key), visible = expanded ? g.models : g.models.slice(0, 4);
   const countLabel = g.models.length === 1 ? T.modelCountOne : fill(T.modelsCount, { n: g.models.length });
   return h("Column", { key: `grp-${g.key}`, gap: 9, padding: [12, 13], radius: 11, background: "surface", border: [1, "border"], fillWidth: true, minWidth: 0 },
     h("Row", { gap: 8, alignItems: "center", fillWidth: true, minWidth: 0 },
@@ -589,42 +663,30 @@ function GroupCard(g) {
         onClick: () => { selectedId = m.id; void copyText(m.id); $metrix.invalidate(); },
       }, TX(m.id, { fontSize: 10, font: "monospace", textColor: selectedId === m.id ? "accentText" : "accent", singleLine: true })))),
     g.models.length > 4
-      ? h("Row", {
-          gap: 4, alignItems: "center", cursor: "pointer",
-          onClick: () => { if (expanded) expandedGroups.delete(g.key); else expandedGroups.add(g.key); $metrix.invalidate(); },
-        }, Icon(expanded ? "chevronDown" : "chevronRight", 12, K.muted), TX(expanded ? T.collapse : fill(T.showAll, { n: g.models.length }), { fontSize: 11, textColor: K.muted }))
+      ? h("Row", { gap: 4, alignItems: "center", cursor: "pointer", onClick: () => { if (expanded) expandedGroups.delete(g.key); else expandedGroups.add(g.key); $metrix.invalidate(); } },
+          Icon(expanded ? "chevronDown" : "chevronRight", 12, K.muted),
+          TX(expanded ? T.collapse : fill(T.showAll, { n: g.models.length }), { fontSize: 11, textColor: K.muted }))
       : null);
 }
-
 function TrendSection(groups) {
   const lead = groups[0], samples = lead ? (trends[lead.seriesKey] || []) : [];
   if (!lead || samples.length < 2) return null;
-  const pts = samples.map(s => ({ x: s.ts, y: s.left_pct, valueLabel: pctText(s.left_pct) }));
   return h("Column", { gap: 6, padding: [10, 12], radius: 10, background: "surface", border: [1, "border"], fillWidth: true },
     h("Row", { gap: 6, alignItems: "center", fillWidth: true },
       TX(`${T.trend} · ${lead.title}`, { fontSize: 11, fontWeight: 600, textColor: K.muted, grow: 1, singleLine: true }),
       TX(pctText(lead.leftPct), { fontSize: 11, fontWeight: 600, fontFeatures: "tnum", textColor: quotaTone(lead.leftPct) })),
     h("Chart", {
-      type: "area", height: 76, fillWidth: true, xKind: "time", yDomain: [0, 100],
-      xTicks: 3, yTicks: 3, curve: "linear", legend: false, hover: true, appear: false, strokeWidth: 1.6,
-      series: [{ name: T.remaining, color: quotaTone(lead.leftPct), fill: { from: 0.18, to: 0 }, points: pts }],
+      type: "area", height: 76, fillWidth: true, xKind: "time", yDomain: [0, 100], xTicks: 3, yTicks: 3, curve: "linear", legend: false, hover: true, appear: false, strokeWidth: 1.6,
+      series: [{ name: T.remaining, color: quotaTone(lead.leftPct), fill: { from: 0.18, to: 0 }, points: samples.map(s => ({ x: s.ts, y: s.left_pct, valueLabel: pctText(s.left_pct) })) }],
     }));
 }
-
-function Skeleton() {
-  const bone = (w, hgt, key) => h("Box", { key, width: w, height: hgt, radius: 8, background: K.hover, shrink: 0 });
-  return h("Column", { gap: 12, padding: [12, 16, 16, 16], fillWidth: true },
-    h("Grid", { columns: 3, gap: 8, fillWidth: true }, [0, 1, 2].map(i => bone("100%", 50, `sk-t-${i}`))),
-    [0, 1, 2].map(i => bone("100%", 96, `sk-c-${i}`)));
-}
-
-function Problem(detail) {
-  return h("Column", { grow: 1, center: true, gap: 8, padding: [28, 24] },
-    Icon("alert", 22, "danger"),
-    TX(T.failed, { fontSize: 14, fontWeight: 600, textAlign: "center" }),
-    TX(detail, { fontSize: 12, textColor: K.muted, textAlign: "center", lineHeight: 1.4, wrap: true }),
-    h("Row", { margin: [6, 0, 0, 0] }, h("Button", { onClick: launchRefresh }, T.tryAgain)));
-}
+const Skeleton = () => h("Column", { gap: 12, padding: [12, 16, 16, 16], fillWidth: true },
+  h("Grid", { columns: 3, gap: 8, fillWidth: true }, [0, 1, 2].map(i => h("Box", { key: `sk-t-${i}`, width: "100%", height: 50, radius: 8, background: K.hover, shrink: 0 }))),
+  [0, 1, 2].map(i => h("Box", { key: `sk-c-${i}`, width: "100%", height: 96, radius: 8, background: K.hover, shrink: 0 })));
+const Problem = detail => h("Column", { grow: 1, center: true, gap: 8, padding: [28, 24] },
+  Icon("alert", 22, "danger"), TX(T.failed, { fontSize: 14, fontWeight: 600, textAlign: "center" }),
+  TX(detail, { fontSize: 12, textColor: K.muted, textAlign: "center", lineHeight: 1.4, wrap: true }),
+  h("Row", { margin: [6, 0, 0, 0] }, h("Button", { onClick: launchRefresh }, T.tryAgain)));
 
 function Body(env) {
   if (!snapshot) return error ? Problem(error) : Skeleton();
@@ -632,68 +694,47 @@ function Body(env) {
   const filtered = q ? snapshot.models.filter(m => `${m.displayName} ${m.id}`.toLowerCase().includes(q)) : snapshot.models;
   const groups = q ? buildGroups(filtered) : snapshot.groups;
   const gridCols = env && env.viewport && finite(env.viewport.width) && env.viewport.width < 400 ? 1 : 2;
-
   return h("Column", { gap: 12, padding: [8, 14, 14, 14], fillWidth: true, minWidth: 0 },
-    error ? h("Row", { gap: 8, padding: [8, 10], radius: 8, background: K.hover, alignItems: "center", fillWidth: true },
-      Icon("alert", 14, "danger"), TX(error, { fontSize: 12, grow: 1, shrink: 1, minWidth: 0, wrap: true })) : null,
+    error ? h("Row", { gap: 8, padding: [8, 10], radius: 8, background: K.hover, alignItems: "center", fillWidth: true }, Icon("alert", 14, "danger"), TX(error, { fontSize: 12, grow: 1, shrink: 1, minWidth: 0, wrap: true })) : null,
     accounts.length > 1 ? h("Select", {
-      key: "acct-select", value: String(activeIdx ?? 0), fillWidth: true,
-      items: accounts.map((a, i) => ({ label: a.label, value: String(i) })),
-      onChange: v => {
-        const idx = Number(v);
-        if (Number.isInteger(idx) && idx >= 0 && idx < accounts.length) {
-          activeIdx = idx;
-          try { localStorage.setItem("antigravity.accountIdx", String(idx)); } catch {}
-          launchRefresh();
-        }
-      },
+      key: "acct-select", value: String(activeIdx ?? 0), fillWidth: true, items: accounts.map((a, i) => ({ label: a.label, value: String(i) })),
+      onChange: v => { const idx = Number(v); if (Number.isInteger(idx) && idx >= 0 && idx < accounts.length) { activeIdx = idx; try { localStorage.setItem("antigravity.accountIdx", String(idx)); } catch {} launchRefresh(); } },
     }) : null,
     SummaryStrip(snapshot.models, snapshot.groups),
     h("Row", { gap: 8, alignItems: "center", fillWidth: true },
       h("SearchField", { key: "model-search", value: search, placeholder: T.searchPlaceholder, grow: 1, onChange: v => { search = String(v); $metrix.invalidate(); } }),
       h("Segmented", {
-        key: "view-mode", value: viewMode,
-        items: [{ label: T.viewGrouped, value: "grouped" }, { label: T.viewGrid, value: "grid" }],
+        key: "view-mode", value: viewMode, items: [{ label: T.viewGrouped, value: "grouped" }, { label: T.viewGrid, value: "grid" }],
         onChange: v => { viewMode = v === "grid" ? "grid" : "grouped"; try { localStorage.setItem("antigravity.viewMode", viewMode); } catch {} $metrix.invalidate(); },
       })),
     !snapshot.models.length
       ? h("Column", { padding: [20, 12], center: true }, TX(T.noModels, { fontSize: 12, textColor: K.muted, textAlign: "center", wrap: true }))
       : !filtered.length
         ? h("Column", { padding: [20, 12], center: true }, TX(T.noMatch, { fontSize: 12, textColor: K.muted, textAlign: "center" }))
-        : viewMode === "grid"
-          ? h("Grid", { columns: gridCols, gap: 10, fillWidth: true }, filtered.map(ModelCard))
-          : h("Column", { gap: 10, fillWidth: true }, groups.map(GroupCard)),
+        : viewMode === "grid" ? h("Grid", { columns: gridCols, gap: 10, fillWidth: true }, filtered.map(ModelCard)) : h("Column", { gap: 10, fillWidth: true }, groups.map(GroupCard)),
     !q ? TrendSection(snapshot.groups) : null);
 }
-
 function Footer() {
-  const ageText = snapshot && snapshot.fetchedAt ? fill(T.updatedAgo, { time: formatAge(snapshot.fetchedAt) }) : error ? T.failed : T.loading;
-  const host = snapshot && snapshot.origin ? snapshot.origin.replace(/^https?:\/\//, "") : "Cloud Code API";
+  const ageText = snapshot && snapshot.fetchedAt ? formatUpdated(snapshot.fetchedAt) : error ? T.failed : T.loading;
+  const host = snapshot && snapshot.origin ? snapshot.origin.replace(/^https?:\/\//, "") : "daily-cloudcode-pa.googleapis.com";
   return h("Row", { gap: 6, padding: [7, 14], alignItems: "center", fillWidth: true },
-    TX(host, { fontSize: 10, textColor: K.muted, singleLine: true, shrink: 1, minWidth: 0 }),
-    h("Spacer"),
+    TX(host, { fontSize: 10, textColor: K.muted, singleLine: true, shrink: 1, minWidth: 0 }), h("Spacer"),
     TX(ageText, { fontSize: 10, textColor: K.muted, fontFeatures: "tnum", shrink: 0 }));
 }
-
 const panelTree = env => h("Column", {
-  preferredWidth: viewMode === "grid" ? 540 : 440, preferredHeight: 620,
-  fill: true, minHeight: 0, safeArea: true, fontSize: 13, textColor: "text",
-  shortcuts: { "CmdOrCtrl+R": launchRefresh },
+  preferredWidth: viewMode === "grid" ? 540 : 440, preferredHeight: 620, fill: true, minHeight: 0, safeArea: true,
+  fontSize: 13, textColor: "text", shortcuts: { "CmdOrCtrl+R": launchRefresh },
 }, Header(), h("Divider"), h("Scroll", { grow: 1, minHeight: 0, fillWidth: true }, Body(env)), h("Divider"), Footer());
 
-// -- Tray, Notch, and System Widgets --
-
+// -- 托盘、刘海与桌面小组件 --
 function trayTree() {
-  const lead = snapshot && snapshot.groups && snapshot.groups[0];
-  const count = snapshot && snapshot.models ? snapshot.models.length : 0;
+  const lead = snapshot && snapshot.groups && snapshot.groups[0], count = snapshot && snapshot.models ? snapshot.models.length : 0;
   return {
-    icon: "data:image/svg+xml," + encodeURIComponent(BRAND), iconTemplate: true,
-    title: lead ? pctText(lead.leftPct) : "", error,
+    icon: "data:image/svg+xml," + encodeURIComponent(BRAND), iconTemplate: true, title: lead ? pctText(lead.leftPct) : "", error,
     tooltip: lead ? `${TITLE} · ${pctText(lead.leftPct)} · ${fill(T.modelsCount, { n: count })} · ${formatCountdown(lead.resetMs)}` : TITLE,
     menu: [{ label: T.refresh, onClick: launchRefresh }, { label: T.copySummary, onClick: () => copyText(buildSummaryText()), disabled: !lead }],
   };
 }
-
 function notchExpanded(groups) {
   if (!snapshot) return h("Column", { padding: [16, 12], fillWidth: true, center: true }, TX(error || T.loading, { fontSize: 12, textColor: K.muted, textAlign: "center", wrap: true }));
   if (!groups.length) return h("Column", { padding: [16, 12], fillWidth: true, center: true }, TX(T.noModels, { fontSize: 12, textColor: K.muted, textAlign: "center" }));
@@ -705,80 +746,40 @@ function notchExpanded(groups) {
         TX(pctText(g.leftPct), { fontSize: 12, fontWeight: 600, fontFeatures: "tnum", textColor: quotaTone(g.leftPct), shrink: 0 })),
       QuotaBar(g.leftPct))));
 }
-
 function notchTree() {
-  const groups = (snapshot && snapshot.groups) || [], lead = groups[0] || null;
-  const tone = lead ? quotaTone(lead.leftPct) : "text";
+  const groups = (snapshot && snapshot.groups) || [], lead = groups[0] || null, tone = lead ? quotaTone(lead.leftPct) : "text";
   const notchState = typeof $metrix.outputs === "function" ? ($metrix.outputs() || {}).notch : undefined;
   return {
-    compact: {
-      leading: Icon("mark", 16, "text"),
-      trailing: lead ? TX(pctText(lead.leftPct), { fontSize: 12, fontWeight: 650, fontFeatures: "tnum", textColor: tone === "success" ? "text" : tone }) : null,
-    },
+    compact: { leading: Icon("mark", 16, "text"), trailing: lead ? TX(pctText(lead.leftPct), { fontSize: 12, fontWeight: 650, fontFeatures: "tnum", textColor: tone === "success" ? "text" : tone }) : null },
     minimal: Icon("mark", 14, tone === "success" ? "text" : tone),
     expanded: notchState === "expanded" ? notchExpanded(groups) : undefined,
     activity,
   };
 }
-
-function widgetRing(g, size) {
-  const left = clampPct(g.leftPct), used = Math.max(0, 100 - left);
-  return h("Chart", {
-    type: "pie", width: size, height: size, innerRadius: 0.74,
-    data: [{ value: Math.max(left, 0.001), color: widgetTone(g.leftPct) }, { value: Math.max(used, 0.001), color: "#8080803d" }],
-  });
-}
-
-function widgetBar(g) {
-  return h("Column", { gap: 4 },
-    h("Row", { gap: 6, alignItems: "center" },
-      TX(g.title, { fontSize: 12, fontWeight: 500, maxLines: 1 }), h("Spacer"),
-      TX(formatCountdown(g.resetMs), { fontSize: 11, color: "secondary", maxLines: 1 }),
-      TX(pctText(g.leftPct), { fontSize: 12, fontWeight: 600, color: widgetTone(g.leftPct), maxLines: 1 })),
-    h("Progress", { value: Math.max(0, Math.min(1, g.leftPct / 100)), color: widgetTone(g.leftPct) }));
-}
-
+const widgetRing = (g, size) => h("Chart", {
+  type: "pie", width: size, height: size, innerRadius: 0.74,
+  data: [{ value: Math.max(clampPct(g.leftPct), 0.001), color: widgetTone(g.leftPct) }, { value: Math.max(100 - clampPct(g.leftPct), 0.001), color: "#8080803d" }],
+});
+const widgetBar = g => h("Column", { gap: 4 },
+  h("Row", { gap: 6, alignItems: "center" }, TX(g.title, { fontSize: 12, fontWeight: 500, maxLines: 1 }), h("Spacer"), TX(formatCountdown(g.resetMs), { fontSize: 11, color: "secondary", maxLines: 1 }), TX(pctText(g.leftPct), { fontSize: 12, fontWeight: 600, color: widgetTone(g.leftPct), maxLines: 1 })),
+  h("Progress", { value: Math.max(0, Math.min(1, g.leftPct / 100)), color: widgetTone(g.leftPct) }));
 function widgetTree(family) {
-  const heading = h("Row", { gap: 6, alignItems: "center" },
-    h("Icon", { svg: BRAND, size: 14, color: "accent" }),
-    TX(TITLE, { fontSize: 13, fontWeight: 600, maxLines: 1 }), h("Spacer"),
-    family !== "small" && snapshot && snapshot.plan ? h("Badge", { text: snapshot.plan }) : null);
-  if (!snapshot) {
-    return h("Column", { gap: 6 }, heading, h("Spacer"),
-      TX(error ? T.failed : T.loading, { fontSize: 12, color: "secondary", textAlign: "center" }),
-      error ? TX(T.reconnect, { fontSize: 11, color: "secondary", textAlign: "center", maxLines: 2 }) : null, h("Spacer"));
-  }
+  const heading = h("Row", { gap: 6, alignItems: "center" }, h("Icon", { svg: BRAND, size: 14, color: "accent" }), TX(TITLE, { fontSize: 13, fontWeight: 600, maxLines: 1 }), h("Spacer"), family !== "small" && snapshot && snapshot.plan ? h("Badge", { text: snapshot.plan }) : null);
+  if (!snapshot) return h("Column", { gap: 6 }, heading, h("Spacer"), TX(error ? T.failed : T.loading, { fontSize: 12, color: "secondary", textAlign: "center" }), error ? TX(T.reconnect, { fontSize: 11, color: "secondary", textAlign: "center", maxLines: 2 }) : null, h("Spacer"));
   const groups = snapshot.groups || [];
   if (!groups.length) return h("Column", { gap: 6 }, heading, h("Spacer"), TX(T.noModels, { fontSize: 12, color: "secondary", textAlign: "center" }), h("Spacer"));
   const lead = groups[0];
-  if (family === "small") {
-    return h("Column", { gap: 6 }, heading, h("Spacer"),
-      h("Row", { gap: 10, alignItems: "center" }, widgetRing(lead, 48),
-        h("Column", { gap: 2 },
-          TX(pctText(lead.leftPct), { fontSize: 22, fontWeight: 700, color: widgetTone(lead.leftPct), maxLines: 1 }),
-          TX(lead.title, { fontSize: 11, color: "secondary", maxLines: 1 }))),
-      TX(formatCountdown(lead.resetMs), { fontSize: 11, color: "secondary", maxLines: 1 }));
-  }
-  return h("Column", { gap: family === "large" ? 10 : 8 }, heading,
-    h("Row", { gap: 12, alignItems: "center" }, widgetRing(lead, family === "large" ? 56 : 44),
-      h("Column", { gap: 2 },
-        TX(pctText(lead.leftPct), { fontSize: 22, fontWeight: 700, color: widgetTone(lead.leftPct), maxLines: 1 }),
-        TX(`${fill(T.modelsCount, { n: snapshot.models.length })} · ${formatCountdown(lead.resetMs)}`, { fontSize: 11, color: "secondary", maxLines: 1 }))),
-    h("Divider"),
-    h("Column", { gap: 8 }, groups.slice(0, family === "large" ? 5 : 2).map(widgetBar)));
+  if (family === "small") return h("Column", { gap: 6 }, heading, h("Spacer"), h("Row", { gap: 10, alignItems: "center" }, widgetRing(lead, 48), h("Column", { gap: 2 }, TX(pctText(lead.leftPct), { fontSize: 22, fontWeight: 700, color: widgetTone(lead.leftPct), maxLines: 1 }), TX(lead.title, { fontSize: 11, color: "secondary", maxLines: 1 }))), TX(formatCountdown(lead.resetMs), { fontSize: 11, color: "secondary", maxLines: 1 }));
+  return h("Column", { gap: family === "large" ? 10 : 8 }, heading, h("Row", { gap: 12, alignItems: "center" }, widgetRing(lead, family === "large" ? 56 : 44), h("Column", { gap: 2 }, TX(pctText(lead.leftPct), { fontSize: 22, fontWeight: 700, color: widgetTone(lead.leftPct), maxLines: 1 }), TX(`${fill(T.modelsCount, { n: snapshot.models.length })} · ${formatCountdown(lead.resetMs)}`, { fontSize: 11, color: "secondary", maxLines: 1 }))), h("Divider"), h("Column", { gap: 8 }, groups.slice(0, family === "large" ? 5 : 2).map(widgetBar)));
 }
 
-// -- Lifecycle Exports --
-
+// -- 生命周期导出 --
 export default {
   async scheduled(env) { inputs = (env && env.inputs) || inputs; await refresh(); },
   render(env) {
     inputs = (env && env.inputs) || inputs;
     if (activity && activity.expiresAt <= Date.now()) activity = undefined;
-    return {
-      tray: trayTree(), panel: panelTree(env), notch: notchTree(),
-      widget: { small: widgetTree("small"), medium: widgetTree("medium"), large: widgetTree("large") },
-    };
+    return { tray: trayTree(), panel: panelTree(env), notch: notchTree(), widget: { small: widgetTree("small"), medium: widgetTree("medium"), large: widgetTree("large") } };
   },
   event(name, payload) {
     if (name === "refresh") return launchRefresh();
