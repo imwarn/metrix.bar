@@ -1,7 +1,7 @@
-<bar protocol-version="0" min-app-version="0.3.0" id="antigravity" title="Antigravity" version="1.2.0"
+<bar protocol-version="0" min-app-version="0.3.2" id="antigravity" title="Antigravity" version="1.3.0"
      category="ai" license="AGPL-3.0-only" homepage="https://github.com/imwarn/metrix.bar"
      description="Monitor Antigravity model quotas, reset countdowns, and local usage trends."
-     refresh="5m" material="glass" placements="menubar" open-mode="flyout" window-style="standard"
+     refresh="15m" material="glass" placements="menubar" open-mode="flyout" window-style="standard"
      widget="true" notch="true"
      icon="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2024%2024%22%20fill%3D%22none%22%20stroke%3D%22currentColor%22%20stroke-width%3D%221.8%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%3E%3Cpath%20d%3D%22M12%202.5%2014.4%209.6%2021.5%2012%2014.4%2014.4%2012%2021.5%209.6%2014.4%202.5%2012%209.6%209.6Z%22%2F%3E%3Ccircle%20cx%3D%2218.5%22%20cy%3D%225.5%22%20r%3D%221.3%22%20fill%3D%22currentColor%22%20stroke%3D%22none%22%2F%3E%3C%2Fsvg%3E">
   <permissions>
@@ -11,60 +11,51 @@
     <network origin="tls://cloudcode-pa.googleapis.com:443" />
     <network origin="https://oauth2.googleapis.com" />
     <network origin="https://openidconnect.googleapis.com" />
+    <file path="~/.gemini/jetski-standalone-oauth-token" />
+    <file path="~/.gemini/antigravity-cli/antigravity-oauth-token" />
     <file path="{{ inputs.authFile }}" />
     <credential service="gemini" account="antigravity" />
   </permissions>
   <inputs>
-    <input name="authFile" type="file" label="Auth JSON File (Optional)" help="Optional exported Antigravity / CC Switch auth JSON file. Leave blank to read the agy CLI login from the system Keychain (service: gemini, account: antigravity).">
-      <locale lang="zh-Hans" label="认证 JSON 文件（可选）" help="可选：自定义导出的 Antigravity / CC Switch 认证 JSON。留空时自动从系统钥匙串读取本机 agy CLI 登录凭据（gemini / antigravity）。" />
-    </input>
-    <input name="credentialsJSON" type="secret" label="Credentials JSON (Optional)" help="Optional manual JSON override stored in the OS Keychain. Takes priority over Auth JSON File and agy Keychain.">
-      <locale lang="zh-Hans" label="凭据 JSON（可选）" help="可选手动覆盖内容，保存在系统钥匙串中，优先级高于本地认证文件和 agy 钥匙串。" />
-    </input>
-    <input name="oauthClientId" type="string" label="OAuth Client ID (Optional)" placeholder="Defaults to agy installed-app OAuth client ID" help="Used with refresh_token to renew expired access tokens when client_id is absent from the JSON.">
-      <locale lang="zh-Hans" label="OAuth Client ID（可选）" help="当认证 JSON 未自带 client_id 时用于 refresh_token 自动续期；留空默认使用 agy 官方客户端 ID。" />
-    </input>
-    <input name="oauthClientSecret" type="secret" label="OAuth Client Secret (Optional)" help="Optional OAuth client_secret stored in Keychain for background refresh_token renewal.">
-      <locale lang="zh-Hans" label="OAuth Client Secret（可选）" help="可选：用于后台自动续期过期令牌；未填写时直接使用 agy 钥匙串中的有效 access_token。" />
-    </input>
-    <input name="endpoint" type="select" label="Cloud Code Endpoint" default="auto" help="Select the Cloud Code Assist backend host. Auto matches agy CLI (daily-cloudcode-pa first).">
-      <locale lang="zh-Hans" label="Cloud Code 接口端点" help="选择 Cloud Code Assist 后端地址，默认与 agy CLI 一致（优先 daily-cloudcode-pa）。" />
-      <option value="auto" label="Auto (Daily -> Production)"><locale lang="zh-Hans" label="自动（Daily 优先，失败回退生产）" /></option>
+    <input name="authFile" type="file" label="Auth JSON File (Optional)" help="Optional custom Antigravity / CC Switch auth JSON file. Leave blank to read ~/.gemini local login files first (no Keychain prompt) with Keychain fallback."><locale lang="zh-Hans" label="认证 JSON 文件（可选）" help="可选：自定义导出的认证 JSON。留空时优先静默读取本机 ~/.gemini 登录态文件（无钥匙串弹窗），缺失时回退系统钥匙串。" /></input>
+    <input name="credentialsJSON" type="secret" label="Credentials JSON (Optional)" help="Optional manual JSON override stored in Metrix.Bar secure storage. Takes priority over files and Keychain."><locale lang="zh-Hans" label="凭据 JSON（可选）" help="可选手动覆盖内容，优先级高于本地认证文件和系统钥匙串。" /></input>
+    <input name="oauthClientId" type="string" label="OAuth Client ID (Optional)" placeholder="Defaults to agy installed-app OAuth client ID" help="Used with refresh_token to renew expired access tokens when client_id is absent from the JSON."><locale lang="zh-Hans" label="OAuth Client ID（可选）" help="当认证 JSON 未自带 client_id 时用于 refresh_token 自动续期；留空默认使用 agy 官方客户端 ID。" /></input>
+    <input name="oauthClientSecret" type="secret" label="OAuth Client Secret (Optional)" help="Optional OAuth client_secret for background refresh_token renewal."><locale lang="zh-Hans" label="OAuth Client Secret（可选）" help="可选：用于后台静默续期过期令牌；未填写时直接使用本机 agy 维护的有效 access_token。" /></input>
+    <input name="endpoint" type="select" label="Cloud Code Endpoint" default="auto" help="Select the Cloud Code Assist backend host. Auto caches the working endpoint (daily-cloudcode-pa first).">
+      <locale lang="zh-Hans" label="Cloud Code 接口端点" help="选择 Cloud Code Assist 后端地址，默认优先使用并缓存 daily-cloudcode-pa。" />
+      <option value="auto" label="Auto (Daily -> Production)"><locale lang="zh-Hans" label="自动（Daily 优先并缓存可用端点）" /></option>
       <option value="daily" label="Daily (daily-cloudcode-pa.googleapis.com)"><locale lang="zh-Hans" label="Daily 环境（daily-cloudcode-pa.googleapis.com）" /></option>
       <option value="prod" label="Production (cloudcode-pa.googleapis.com)"><locale lang="zh-Hans" label="生产环境（cloudcode-pa.googleapis.com）" /></option>
     </input>
-    <input name="accountIndex" type="integer" label="Default Account Index" default="0" help="Zero-based index used when an auth JSON file contains multiple accounts.">
-      <locale lang="zh-Hans" label="默认账号索引" help="当认证 JSON 包含多账号时默认读取的索引（从 0 开始）。" />
-    </input>
-    <input name="notchActivity" type="bool" label="Warn in the notch when quota is low" default="true" help="Briefly highlight Antigravity in the notch when any active model group drops to 20% or below.">
-      <locale lang="zh-Hans" label="额度偏低时在刘海中提醒" help="当任意模型配额组剩余降至 20% 及以下时，在刘海中短暂优先展示 Antigravity。" />
-    </input>
+    <input name="accountIndex" type="integer" label="Default Account Index" default="0" help="Zero-based index used when an auth JSON file contains multiple accounts."><locale lang="zh-Hans" label="默认账号索引" help="当认证 JSON 包含多账号时默认读取的索引（从 0 开始）。" /></input>
+    <input name="notchActivity" type="bool" label="Warn in the notch when quota is low" default="true" help="Briefly highlight Antigravity in the notch when any active quota bucket drops to 20% or below."><locale lang="zh-Hans" label="额度偏低时在刘海中提醒" help="当任意配额桶剩余降至 20% 及以下时，在刘海中短暂优先展示 Antigravity。" /></input>
   </inputs>
-  <docs><![CDATA[默认自动读取本机 Antigravity CLI（agy）保存在系统钥匙串（service: gemini, account: antigravity）中的官方登录状态，无需手动导出文件。也支持在输入项中选择自定义认证 JSON（兼容单账号、accounts 数组与 CC Switch agy_accounts.json）或粘贴到“凭据 JSON”。直连 daily-cloudcode-pa.googleapis.com 查询当前账号下有额度的模型与配额桶，支持“配额分组”与“卡片网格”双视图、SQLite 趋势、Notch 与桌面小组件。]]></docs>
+  <docs><![CDATA[默认优先静默读取本机 Antigravity / agy 1.5+ 在 ~/.gemini/ 下维护的登录态文件（无钥匙串弹窗），并在内存中缓存有效凭据；仅当本地文件不存在时才在首次启动或手动刷新时回退读取系统钥匙串（gemini / antigravity）。日常按 15 分钟周期单发 retrieveUserQuotaSummary 低频更新 5H 与 WEEKLY 配额，24 小时持久化缓存套餐/项目/模型目录，切换到“卡片网格”时按需拉取单模型实时明细。]]></docs>
   <script apis="sqlite clipboard localStorage sockets"><![CDATA[
 /**
- * [INPUT]: 依赖 Metrix.Bar 宿主 $metrix（readCredential/readFile/secret/sqlite/caniuse）、cloudflare:sockets TLS 与 Cloud Code API
- * [OUTPUT]: 导出 Metrix.Bar Worker（scheduled/render/event），渲染托盘、双视图面板、Notch 与三尺寸桌面小组件
+ * [INPUT]: 依赖 Metrix.Bar 宿主 $metrix（readFile/readCredential/secret/sqlite/caniuse）、localStorage、cloudflare:sockets TLS 与 Cloud Code API
+ * [OUTPUT]: 导出 Metrix.Bar Worker（scheduled/render/event），低频单请求查询配额并渲染托盘、5H+WEEKLY 分组/新模型网格面板、Notch 与桌面小组件
  * [POS]: dashboards/antigravity 唯一看板源文件，被 Metrix.Bar 直接加载并由 antigravity.test.cjs 做离线单测
  * [PROTOCOL]: Update this header on change, then check GEMINI.md
  */
 // SPDX-License-Identifier: AGPL-3.0-only
 // UI/SQLite/Notch/Widget patterns reference official Metrix.Bar AI dashboards (claude-code.bar & codex.bar, AGPL-3.0-only).
-// Local agy Keychain format (go-keyring-base64:) and daily-cloudcode-pa quota protocol reference cc-switch.
+// Local agy token/Keychain format and daily-cloudcode-pa quota protocol reference cc-switch.
 
 const h = (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity).filter(c => c !== null && c !== undefined && c !== false) });
 const TX = (text, props) => h("Text", props || {}, String(text));
 const TITLE = "Antigravity";
 const ENDPOINTS = { daily: "https://daily-cloudcode-pa.googleapis.com", prod: "https://cloudcode-pa.googleapis.com" };
+const LOCAL_TOKEN_FILES = ["~/.gemini/jetski-standalone-oauth-token", "~/.gemini/antigravity-cli/antigravity-oauth-token"];
 const DEFAULT_OAUTH_CLIENT_ID = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
-const AGY_USER_AGENT = "Metrix.Bar/1.1 (antigravity/cli/1.5.5)";
+const AGY_USER_AGENT = "Metrix.Bar/1.3 (antigravity/cli/1.5.15)";
 const GO_KEYRING_PREFIX = "go-keyring-base64:";
 const K = { muted: "textMuted", hover: "surfaceHover", press: "surfacePressed", track: "border" };
+const AUTH_MARGIN_MS = 120e3, EXPAND_STALE_MS = 300e3, META_TTL_MS = 24 * 3600e3;
 const CYCLE_SLACK = 15 * 60e3, KEEP_MS = 35 * 864e5, LOW_QUOTA_THRESHOLD = 20;
 
 // -- 图标与双语文案 --
-const svg = (body, fill = false) =>
-  `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" ${fill ? 'fill="currentColor"' : 'fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"'}>${body}</svg>`;
+const svg = (body, fill = false) => `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" ${fill ? 'fill="currentColor"' : 'fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"'}>${body}</svg>`;
 const BRAND = svg(`<path d="M12 2.5 14.4 9.6 21.5 12 14.4 14.4 12 21.5 9.6 14.4 2.5 12 9.6 9.6Z"/><circle cx="18.5" cy="5.5" r="1.3" fill="currentColor" stroke="none"/>`);
 const ICON = {
   mark: BRAND, sparkle: svg(`<path d="M12 3 14.2 9.8 21 12 14.2 14.2 12 21 9.8 14.2 3 12 9.8 9.8Z"/>`, true),
@@ -80,27 +71,33 @@ const Icon = (name, size = 14, color = K.muted, extra) => h("Icon", { svg: ICON[
 const STRINGS = {
   en: {
     refresh: "Refresh", copySummary: "Copy summary", copied: "Copied {text}", loading: "Loading Antigravity quotas…", failed: "Couldn’t load quotas",
-    reconnect: "Sign in with `agy` and allow Keychain access, or set an auth JSON.", tryAgain: "Try again", noModels: "No models with active quota were returned for this account.",
+    reconnect: "Run `agy` to sign in or refresh your token, then retry.", tryAgain: "Try again", noModels: "No active quota buckets were returned for this account.",
     noMatch: "No models match your search.", searchPlaceholder: "Search model name or ID", viewGrouped: "Grouped", viewGrid: "Grid",
     modelsCount: "{n} models", modelCountOne: "1 model", lowestQuota: "Lowest", nextReset: "Next reset", activeModels: "Quota models", trend: "Quota trend",
     remaining: "Left", resetUnknown: "Reset time unknown", resetNow: "Soon", updatedNow: "Updated just now", updatedAgo: "Updated {time} ago",
     showAll: "Show all {n} models", collapse: "Collapse", authInvalid: "The Antigravity credential data is not valid JSON.", authNoToken: "No access_token or refresh_token found in credentials.",
-    authMissing: "Sign in with `agy` first and allow Metrix.Bar to read the Keychain item (gemini / antigravity), or select an exported auth JSON in Inputs.",
-    refreshNeedsClient: "The access_token has expired. Run `agy` once to renew it, or provide OAuth Client Secret in Inputs for automatic renewal.",
+    authNotFound: "No local `agy` login found (checked ~/.gemini and Keychain). Run `agy` in Terminal to sign in first.",
+    keychainDenied: "macOS Keychain access was denied (click “Always Allow” in the prompt, or run `agy` once to write ~/.gemini token files).",
+    keychainAccessOrMissing: "No ~/.gemini token found and Keychain could not be read (if prompted click “Always Allow”, or run `agy` in Terminal to sign in).",
+    authFileError: "Cannot read the configured Auth JSON file ({path}): {reason}",
+    tokenExpired: "The access_token has expired. Run `agy` in Terminal to renew it and click Refresh, or set OAuth Client Secret in Inputs.",
     refreshFailed: "OAuth token refresh failed (HTTP {status}). Run `agy` to sign in again.", expired: "Authentication expired (HTTP {status}). Run `agy` to refresh your login.",
     rateLimited: "Cloud Code API rate limited this request. Try again shortly.", httpError: "Cloud Code API returned HTTP {status}.",
     networkError: "Unable to reach Cloud Code API. Check your network or proxy settings.", invalidResp: "Cloud Code API returned an invalid response.",
   },
   "zh-Hans": {
     refresh: "刷新", copySummary: "复制额度摘要", copied: "已复制 {text}", loading: "正在加载 Antigravity 模型额度…", failed: "无法加载额度",
-    reconnect: "请先使用 `agy` 登录并允许访问系统钥匙串，或在设置中指定认证 JSON。", tryAgain: "重试", noModels: "当前账号未返回包含额度的模型。",
+    reconnect: "请在终端运行 `agy` 登录或续期令牌后重试。", tryAgain: "重试", noModels: "当前账号未返回有效配额数据。",
     noMatch: "没有匹配的模型，请调整搜索关键词。", searchPlaceholder: "搜索模型名称或 ID", viewGrouped: "配额分组", viewGrid: "卡片网格",
     modelsCount: "{n} 个模型", modelCountOne: "1 个模型", lowestQuota: "最低剩余", nextReset: "最近重置", activeModels: "有额度模型", trend: "剩余趋势",
     remaining: "剩余", resetUnknown: "重置时间未知", resetNow: "即将重置", updatedNow: "刚刚更新", updatedAgo: "{time}前更新",
     showAll: "展开全部 {n} 个模型", collapse: "收起", authInvalid: "Antigravity 认证数据不是有效的 JSON。", authNoToken: "凭据中未找到 access_token 或 refresh_token。",
-    authMissing: "无法读取本机 agy 钥匙串凭据（gemini / antigravity）或认证文件。请先运行 `agy` 登录并允许钥匙串访问，或在看板设置中填写认证 JSON。",
-    refreshNeedsClient: "当前 access_token 已过期。请运行一次 `agy` 刷新本机令牌，或在看板设置中补充 OAuth Client Secret 以启用后台自动续期。",
-    refreshFailed: "OAuth 令牌续期失败（HTTP {status}），请重新运行 `agy` 登录。", expired: "登录认证已失效（HTTP {status}），请运行 `agy` 重新登录或刷新令牌。",
+    authNotFound: "本机未找到 agy 登录记录（已检查 ~/.gemini 与系统钥匙串，请先在终端完成 `agy` 登录）。",
+    keychainDenied: "系统钥匙串拒绝访问（请在弹窗点击“始终允许”，或在终端运行一次 `agy` 生成 ~/.gemini 本地登录态）。",
+    keychainAccessOrMissing: "未找到 ~/.gemini 本地登录文件，且系统钥匙串读取失败（若弹出钥匙串窗口请点击“始终允许”；若未登录请先在终端完成 `agy` 登录）。",
+    authFileError: "无法读取指定的认证文件（{path}）：{reason}",
+    tokenExpired: "登录令牌已过期（请在终端运行一次 `agy` 续期后点击右上角刷新，或在设置中配置 OAuth Client Secret）。",
+    refreshFailed: "OAuth 令牌续期失败（HTTP {status}），请重新运行 `agy` 登录。", expired: "登录认证已失效（HTTP {status}），请运行 `agy` 刷新令牌后点击刷新。",
     rateLimited: "Cloud Code 接口请求受限（HTTP 429），请稍后重试。", httpError: "Cloud Code 接口返回 HTTP {status}。",
     networkError: "无法连接 Cloud Code 接口，请检查网络或代理设置。", invalidResp: "Cloud Code 接口返回了无法解析的数据。",
   },
@@ -115,12 +112,7 @@ const pctText = v => (finite(v) ? `${clampPct(v)}%` : "—");
 const quotaTone = v => (!finite(v) ? "textMuted" : v <= 10 ? "danger" : v <= 30 ? "warning" : "success");
 const widgetTone = v => (!finite(v) ? "secondary" : v <= 10 ? "error" : v <= 30 ? "warning" : "success");
 const pad2 = n => String(n).padStart(2, "0");
-
-function formatResetStamp(ms) {
-  if (!finite(ms)) return T.resetUnknown;
-  const d = new Date(ms);
-  return `${d.getFullYear()}/${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`;
-}
+const formatResetStamp = ms => { if (!finite(ms)) return T.resetUnknown; const d = new Date(ms); return `${d.getFullYear()}/${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`; };
 function formatCountdown(ms, now = Date.now()) {
   if (!finite(ms)) return "—";
   const diff = ms - now;
@@ -132,18 +124,12 @@ function formatUpdated(ts, now = Date.now()) {
   if (!ts) return "";
   const secs = Math.max(0, Math.floor((now - ts) / 1000));
   if (secs < 45) return T.updatedNow;
-  const time = secs < 3600 ? `${Math.floor(secs / 60)}m` : secs < 86400 ? `${Math.floor(secs / 3600)}h` : `${Math.floor(secs / 86400)}d`;
-  return fill(T.updatedAgo, { time });
+  return fill(T.updatedAgo, { time: secs < 3600 ? `${Math.floor(secs / 60)}m` : secs < 86400 ? `${Math.floor(secs / 3600)}h` : `${Math.floor(secs / 86400)}d` });
 }
 function parseTimestamp(raw) {
   if (raw == null || raw === "") return NaN;
   if (typeof raw === "number" && Number.isFinite(raw)) return raw < 1e12 ? raw * 1000 : raw;
-  if (typeof raw === "string") {
-    const s = raw.trim();
-    if (/^\d+(\.\d+)?$/.test(s)) { const n = Number(s); return n < 1e12 ? n * 1000 : n; }
-    const parsed = Date.parse(s);
-    return Number.isFinite(parsed) ? parsed : NaN;
-  }
+  if (typeof raw === "string") { const s = raw.trim(); if (/^\d+(\.\d+)?$/.test(s)) { const n = Number(s); return n < 1e12 ? n * 1000 : n; } const p = Date.parse(s); return Number.isFinite(p) ? p : NaN; }
   return NaN;
 }
 function decodeBase64Utf8(b64) {
@@ -154,16 +140,12 @@ function decodeBase64Utf8(b64) {
 function jwtEmail(idToken) {
   const part = typeof idToken === "string" ? idToken.split(".")[1] : "";
   if (!part) return "";
-  try {
-    const claims = JSON.parse(decodeBase64Utf8(part.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((part.length + 3) % 4)));
-    return typeof claims.email === "string" ? claims.email.trim() : "";
-  } catch { return ""; }
+  try { const c = JSON.parse(decodeBase64Utf8(part.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((part.length + 3) % 4))); return typeof c.email === "string" ? c.email.trim() : ""; } catch { return ""; }
 }
 
-// -- 凭据读取（钥匙串 go-keyring-base64 + 认证 JSON）与令牌续期 --
+// -- 凭据解析、内存缓存（防钥匙串高频弹窗）与精确异常诊断 --
 function decodeCredentialPayload(raw) {
-  const trimmed = String(raw || "").trim();
-  const jsonText = trimmed.startsWith(GO_KEYRING_PREFIX) ? decodeBase64Utf8(trimmed.slice(GO_KEYRING_PREFIX.length)) : trimmed;
+  const trimmed = String(raw || "").trim(), jsonText = trimmed.startsWith(GO_KEYRING_PREFIX) ? decodeBase64Utf8(trimmed.slice(GO_KEYRING_PREFIX.length)) : trimmed;
   let doc;
   try { doc = JSON.parse(jsonText); } catch { throw new Error(T.authInvalid); }
   if (!doc || typeof doc !== "object") throw new Error(T.authInvalid);
@@ -182,10 +164,8 @@ function normalizeAccount(entry, idx) {
   const expiresAt = parseTimestamp(cred.expiry ?? nested.expiry ?? cred.expires_at ?? cred.expiresAt ?? cred.expired ?? cred.expiry_date ?? cred.expiryDate ?? nested.expires_at ?? nested.expiresAt ?? nested.expired ?? nested.expiry_date ?? nested.expiryDate);
   const idToken = pick(cred.id_token, cred.idToken, nested.id_token, nested.idToken);
   const email = pick(entry.email, cred.email, cred.id_token_email, entry.account, entry.userEmail, nested.email) || jwtEmail(idToken);
-  const clientId = pick(cred.client_id, cred.clientId, nested.client_id, nested.clientId);
-  const clientSecret = pick(cred.client_secret, cred.clientSecret, nested.client_secret, nested.clientSecret);
-  const label = email || projectId || `Account #${idx + 1}`;
-  const key = email || entry.sub || projectId || (refreshToken ? `rt:${refreshToken.slice(-8)}` : `at:${accessToken.slice(-8)}`);
+  const clientId = pick(cred.client_id, cred.clientId, nested.client_id, nested.clientId), clientSecret = pick(cred.client_secret, cred.clientSecret, nested.client_secret, nested.clientSecret);
+  const label = email || projectId || `Account #${idx + 1}`, key = email || entry.sub || projectId || (refreshToken ? `rt:${refreshToken.slice(-8)}` : `at:${accessToken.slice(-8)}`);
   return { key, label, email, accessToken, refreshToken, expiresAt, projectId, clientId, clientSecret };
 }
 function parseAuthJSON(raw) {
@@ -202,25 +182,86 @@ function parseAuthJSON(raw) {
   if (!list.length) throw new Error(T.authNoToken);
   return { accounts: list, defaultIdx };
 }
-async function readAuthAccounts() {
-  let raw = "";
-  try { raw = $metrix.secret("credentialsJSON") || ""; } catch {}
-  if (!raw.trim()) { const p = String(inputs.authFile || "").trim(); if (p) { try { raw = await $metrix.readFile(p); } catch {} } }
-  if (!raw.trim() && typeof $metrix.readCredential === "function") { try { raw = await $metrix.readCredential("gemini", "antigravity"); } catch {} }
-  if (!raw || !raw.trim()) throw new Error(T.authMissing);
-  return parseAuthJSON(raw);
+
+let cachedAuth = null, keychainTried = false, forceCredReload = false;
+const tokenCache = new Map(), emailCache = new Map();
+const authInputsSig = () => `${String(inputs.authFile || "").trim()}|${inputs.accountIndex ?? 0}`;
+const isMissingErr = msg => /enoent|no such file|not found|does not exist|cannot find|item could not be found|-25300|不存在|未找到/i.test(msg);
+const isDeniedErr = msg => /eacces|eperm|denied|permission|authoriz|not allowed|canceled|cancelled|-128|-25293|拒绝|权限/i.test(msg);
+
+async function readSecretCompat(name) {
+  if (typeof $metrix.secret !== "function") return "";
+  try { const v = await Promise.resolve($metrix.secret(name)); return typeof v === "string" ? v.trim() : ""; } catch { return ""; }
+}
+const pickTargetAccount = parsed => { const idx = activeIdx !== null && activeIdx >= 0 && activeIdx < parsed.accounts.length ? activeIdx : parsed.defaultIdx; return parsed.accounts[idx] || parsed.accounts[0]; };
+function storeCachedAuth(parsed, source) {
+  const acct = pickTargetAccount(parsed), cachedTok = acct && tokenCache.get(acct.key);
+  cachedAuth = { sig: authInputsSig(), parsed, expiresAt: cachedTok && finite(cachedTok.expiresAt) ? cachedTok.expiresAt : (acct ? acct.expiresAt : NaN), source };
+  forceCredReload = false;
+  return parsed;
+}
+function classifyKeychainError(kcErr, customPath, customErr, localParseErr) {
+  if (localParseErr) return localParseErr;
+  if (customPath && customErr) {
+    const m = String(customErr.message || customErr);
+    if (m === T.authInvalid || m === T.authNoToken) return customErr;
+    if (!isMissingErr(m)) return new Error(fill(T.authFileError, { path: customPath, reason: m.slice(0, 80) }));
+  }
+  const msg = String((kcErr && kcErr.message) || kcErr || "");
+  if (isDeniedErr(msg)) return new Error(T.keychainDenied);
+  if (customPath && customErr) return new Error(fill(T.authFileError, { path: customPath, reason: String(customErr.message || customErr).slice(0, 80) }));
+  return new Error(isMissingErr(msg) ? T.authNotFound : T.keychainAccessOrMissing);
 }
 
-const tokenCache = new Map(), emailCache = new Map();
+async function readAuthAccounts(manual = false) {
+  const now = Date.now(), sig = authInputsSig();
+  if (cachedAuth && cachedAuth.sig !== sig) { cachedAuth = null; keychainTried = false; }
+  if (cachedAuth && !forceCredReload) {
+    const acct = pickTargetAccount(cachedAuth.parsed), tok = acct && tokenCache.get(acct.key), exp = tok && finite(tok.expiresAt) ? tok.expiresAt : cachedAuth.expiresAt;
+    if (!finite(exp) || exp - now > AUTH_MARGIN_MS) return cachedAuth.parsed;
+  }
+  const secRaw = await readSecretCompat("credentialsJSON");
+  if (secRaw) return storeCachedAuth(parseAuthJSON(secRaw), "secret");
+
+  const customPath = String(inputs.authFile || "").trim();
+  let customErr = null;
+  if (customPath) {
+    try { const raw = await $metrix.readFile(customPath); if (raw && raw.trim()) return storeCachedAuth(parseAuthJSON(raw), "custom-file"); }
+    catch (e) { if (e && (e.message === T.authInvalid || e.message === T.authNoToken)) throw e; customErr = e; }
+  }
+  let bestLocal = null, localParseErr = null;
+  for (const p of LOCAL_TOKEN_FILES) {
+    try {
+      const raw = await $metrix.readFile(p);
+      if (!raw || !raw.trim()) continue;
+      const parsed = parseAuthJSON(raw), acct = pickTargetAccount(parsed), rank = finite(acct.expiresAt) ? acct.expiresAt : 1;
+      if (!bestLocal || rank > bestLocal.rank) bestLocal = { parsed, expiresAt: acct.expiresAt, rank };
+    } catch (e) { const m = String((e && e.message) || e || ""); if (m === T.authInvalid || m === T.authNoToken) localParseErr = e; }
+  }
+  if (bestLocal && (!finite(bestLocal.expiresAt) || bestLocal.expiresAt > now || !manual)) return storeCachedAuth(bestLocal.parsed, "local-file");
+
+  if (typeof $metrix.readCredential === "function" && (!keychainTried || manual)) {
+    keychainTried = true;
+    try { const raw = await $metrix.readCredential("gemini", "antigravity"); if (raw && raw.trim()) return storeCachedAuth(parseAuthJSON(raw), "keychain"); }
+    catch (kcErr) {
+      if (kcErr && (kcErr.message === T.authInvalid || kcErr.message === T.authNoToken)) throw kcErr;
+      if (bestLocal) return storeCachedAuth(bestLocal.parsed, "local-file");
+      throw classifyKeychainError(kcErr, customPath, customErr, localParseErr);
+    }
+  }
+  if (bestLocal) return storeCachedAuth(bestLocal.parsed, "local-file");
+  if (customPath && customErr) throw new Error(fill(T.authFileError, { path: customPath, reason: String(customErr.message || customErr).slice(0, 80) }));
+  if (localParseErr) throw localParseErr;
+  throw new Error(keychainTried ? T.keychainAccessOrMissing : T.authNotFound);
+}
+
 async function refreshAccessToken(account) {
   const clientId = account.clientId || String(inputs.oauthClientId || "").trim() || DEFAULT_OAUTH_CLIENT_ID;
-  let clientSecret = account.clientSecret || "";
-  if (!clientSecret) { try { clientSecret = ($metrix.secret("oauthClientSecret") || "").trim(); } catch {} }
-  if (!account.refreshToken || !clientId || !clientSecret) throw new Error(T.refreshNeedsClient);
+  const clientSecret = account.clientSecret || (await readSecretCompat("oauthClientSecret"));
+  if (!account.refreshToken || !clientId || !clientSecret) throw new Error(T.tokenExpired);
   const body = new URLSearchParams({ grant_type: "refresh_token", refresh_token: account.refreshToken, client_id: clientId, client_secret: clientSecret });
   let res;
-  try { res = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" }, body: body.toString() }); }
-  catch { throw new Error(T.networkError); }
+  try { res = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" }, body: body.toString() }); } catch { throw new Error(T.networkError); }
   const text = await res.text();
   if (!res.ok) throw new Error(fill(T.refreshFailed, { status: res.status }));
   let parsed;
@@ -228,17 +269,19 @@ async function refreshAccessToken(account) {
   if (!parsed || typeof parsed.access_token !== "string" || !parsed.access_token) throw new Error(T.invalidResp);
   const next = { accessToken: parsed.access_token, expiresAt: Date.now() + (Number(parsed.expires_in) || 3600) * 1000 };
   tokenCache.set(account.key, next);
+  if (cachedAuth) cachedAuth.expiresAt = next.expiresAt;
   return next.accessToken;
 }
 async function resolveAccessToken(account, forceRefresh = false) {
-  const now = Date.now(), margin = 60e3, cached = tokenCache.get(account.key);
+  const now = Date.now(), cached = tokenCache.get(account.key);
   if (!forceRefresh) {
-    if (cached && cached.accessToken && (!finite(cached.expiresAt) || cached.expiresAt - now > margin)) return cached.accessToken;
-    if (account.accessToken && (!finite(account.expiresAt) || account.expiresAt - now > margin)) return account.accessToken;
+    if (cached && cached.accessToken && (!finite(cached.expiresAt) || cached.expiresAt - now > AUTH_MARGIN_MS)) return cached.accessToken;
+    if (account.accessToken && (!finite(account.expiresAt) || account.expiresAt - now > AUTH_MARGIN_MS)) return account.accessToken;
   }
-  if (account.refreshToken) { try { return await refreshAccessToken(account); } catch (e) { if (!forceRefresh && account.accessToken) return account.accessToken; throw e; } }
-  if (account.accessToken && !forceRefresh) return account.accessToken;
-  throw new Error(T.refreshNeedsClient);
+  const notYetExpired = !forceRefresh && ((cached && cached.accessToken && finite(cached.expiresAt) && cached.expiresAt > now) || (account.accessToken && (!finite(account.expiresAt) || account.expiresAt > now)));
+  if (account.refreshToken) { try { return await refreshAccessToken(account); } catch (e) { if (notYetExpired) return (cached && cached.accessToken) || account.accessToken; throw e; } }
+  if (notYetExpired) return (cached && cached.accessToken) || account.accessToken;
+  throw new Error(T.tokenExpired);
 }
 async function fetchUserEmail(accessToken, key) {
   if (emailCache.has(key)) return emailCache.get(key);
@@ -252,8 +295,19 @@ async function fetchUserEmail(accessToken, key) {
   } catch { return ""; } finally { clearTimeout(timer); }
 }
 
+// -- 24h 元数据持久化缓存与端点黏性控制 --
+const readJsonStorage = key => { try { const r = localStorage.getItem(key); return r ? JSON.parse(r) : null; } catch { return null; } };
+const writeJsonStorage = (key, val) => { try { localStorage.setItem(key, JSON.stringify(val)); } catch {} };
+const readAccountMeta = accountKey => { const m = readJsonStorage(`antigravity.meta.${accountKey}`); return m && finite(m.ts) && Date.now() - m.ts < META_TTL_MS ? m : null; };
+function targetOrigins() {
+  const p = String(inputs.endpoint || "auto");
+  if (p === "prod") return [ENDPOINTS.prod];
+  if (p === "daily") return [ENDPOINTS.daily];
+  const sticky = readJsonStorage("antigravity.origin");
+  return sticky && (sticky.origin === ENDPOINTS.daily || sticky.origin === ENDPOINTS.prod) && finite(sticky.ts) && Date.now() - sticky.ts < META_TTL_MS ? [sticky.origin] : [ENDPOINTS.daily, ENDPOINTS.prod];
+}
+
 // -- Cloud Code Assist TLS 传输与模型配额解析 --
-const targetOrigins = () => { const p = String(inputs.endpoint || "auto"); return p === "prod" ? [ENDPOINTS.prod] : p === "daily" ? [ENDPOINTS.daily] : [ENDPOINTS.daily, ENDPOINTS.prod]; };
 function concatBytes(chunks) { let t = 0, o = 0; for (const c of chunks) t += c.length; const out = new Uint8Array(t); for (const c of chunks) { out.set(c, o); o += c.length; } return out; }
 function findSequence(buf, seq, from = 0) { outer: for (let i = from; i <= buf.length - seq.length; i++) { for (let j = 0; j < seq.length; j++) if (buf[i + j] !== seq[j]) continue outer; return i; } return -1; }
 function decodeChunkedBytes(buf) {
@@ -265,8 +319,7 @@ function decodeChunkedBytes(buf) {
     const size = parseInt(dec.decode(buf.subarray(pos, end)).split(";")[0].trim(), 16);
     if (!Number.isFinite(size) || size < 0) break;
     if (size === 0) { if (findSequence(buf, crlf, end + 2) >= 0) complete = true; break; }
-    pos = end + 2;
-    if (pos + size + 2 > buf.length) break;
+    pos = end + 2; if (pos + size + 2 > buf.length) break;
     parts.push(buf.subarray(pos, pos + size)); pos += size + 2;
   }
   return { bytes: concatBytes(parts), complete };
@@ -283,7 +336,6 @@ function parseHttpBytes(raw) {
   else if (headers["content-length"] !== undefined) { const cl = Number(headers["content-length"]); if (Number.isFinite(cl) && bodyBytes.length >= cl) { bodyBytes = bodyBytes.subarray(0, cl); complete = true; } }
   return { status: Number(m[1]), text: dec.decode(bodyBytes), complete };
 }
-
 let socketsConnect = undefined;
 async function postViaTlsSocket(origin, method, accessToken, payload) {
   if (socketsConnect === undefined) {
@@ -313,7 +365,6 @@ async function postViaTlsSocket(origin, method, accessToken, payload) {
     return parseHttpBytes(concatBytes(chunks));
   } finally { clearTimeout(timer); try { await sock.close(); } catch {} }
 }
-
 async function postCloudCode(origin, method, accessToken, payload) {
   let status = 0, text = "";
   try {
@@ -321,13 +372,10 @@ async function postCloudCode(origin, method, accessToken, payload) {
     if (tlsRes) { status = tlsRes.status; text = tlsRes.text; }
     else {
       const controller = new AbortController(), timer = setTimeout(() => controller.abort(), 6000);
-      try {
-        const res = await fetch(`${origin}/v1internal:${method}`, { method: "POST", signal: controller.signal, headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify(payload || {}) });
-        status = res.status; text = await res.text();
-      } finally { clearTimeout(timer); }
+      try { const res = await fetch(`${origin}/v1internal:${method}`, { method: "POST", signal: controller.signal, headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify(payload || {}) }); status = res.status; text = await res.text(); }
+      finally { clearTimeout(timer); }
     }
-    let parsed = null;
-    try { parsed = JSON.parse(text); } catch {}
+    let parsed = null; try { parsed = JSON.parse(text); } catch {}
     const detail = parsed && parsed.error && typeof parsed.error.message === "string" ? parsed.error.message.trim() : "";
     if (status === 401) throw Object.assign(new Error(fill(T.expired, { status: 401 })), { status: 401 });
     if (status === 403) throw Object.assign(new Error(detail || fill(T.expired, { status: 403 })), { status: 403 });
@@ -342,26 +390,20 @@ async function postCloudCode(origin, method, accessToken, payload) {
   }
 }
 
-const inferFamily = (id, name) => {
-  const s = `${id} ${name}`.toLowerCase();
-  return /claude|opus|sonnet|haiku|^3p-|\b3p\b|third/.test(s) ? "claude" : /gpt|openai|\bo1\b|\bo3\b|\bo4\b/.test(s) ? "gpt" : /gemini|argon|carbon|hydrogen|neon/.test(s) ? "gemini" : "other";
-};
+const inferFamily = (id, name) => { const s = `${id} ${name}`.toLowerCase(); return /claude|opus|sonnet|haiku|^3p-|\b3p\b|third/.test(s) ? "claude" : /gpt|openai|\bo1\b|\bo3\b|\bo4\b/.test(s) ? "gpt" : /gemini|argon|carbon|hydrogen|neon/.test(s) ? "gemini" : "other"; };
 const familyLabel = f => ({ gemini: "Gemini Models", claude: "Claude & GPT", gpt: "GPT", other: "Models" })[f] || "Models";
 const prettifyModelId = id => String(id).split(/[-_]+/).filter(Boolean).map(w => (/^xhigh$/i.test(w) ? "XHigh" : w.charAt(0).toUpperCase() + w.slice(1))).join(" ");
 const shortGroupName = name => String(name || "").replace(/\s+models?$/i, "").replace(/\band\b/i, "&").trim() || "Quota";
 
 function extractModelVersion(id, displayName) {
-  const s = `${displayName} ${id}`.toLowerCase();
-  const m = /(?:gemini|claude|opus|sonnet|haiku|gpt)[^0-9]{0,14}(\d+)(?:[._-](\d+))?(?!\d*[bk]\b)/.exec(s);
+  const s = `${displayName} ${id}`.toLowerCase(), m = /(?:gemini|claude|opus|sonnet|haiku|gpt)[^0-9]{0,14}(\d+)(?:[._-](\d+))?(?!\d*[bk]\b)/.exec(s);
   if (m) return Number(m[1]) * 100 + (m[2] ? Number(m[2]) : 0);
   const g = /(?:^|[\s_-])v?(\d+)(?:\.(\d+))?(?=$|[\s_-])/.exec(s);
   return g && Number(g[1]) < 30 ? Number(g[1]) * 100 + (g[2] ? Number(g[2]) : 0) : 0;
 }
 const extractTierScore = s => (/argon|ultra|opus/.test(s) ? 4 : /carbon|pro|sonnet/.test(s) ? 3 : /hydrogen|neon|flash/.test(s) ? 2 : /lite|haiku|mini/.test(s) ? 1 : 0);
 const extractEffortScore = s => (/\bxhigh\b|\bmax\b/.test(s) ? 4 : /\bhigh\b/.test(s) ? 3 : /\bmedium\b/.test(s) ? 2 : /\blow\b/.test(s) ? 1 : 0);
-const compareModelsNewestFirst = (a, b) =>
-  (a.isUtility - b.isUtility) || (a.pickerRank - b.pickerRank) || (b.recommended - a.recommended) ||
-  (b.versionScore - a.versionScore) || (b.tierScore - a.tierScore) || (b.effortScore - a.effortScore) || a.displayName.localeCompare(b.displayName);
+const compareModelsNewestFirst = (a, b) => (a.isUtility - b.isUtility) || (a.pickerRank - b.pickerRank) || (b.recommended - a.recommended) || (b.versionScore - a.versionScore) || (b.tierScore - a.tierScore) || (b.effortScore - a.effortScore) || a.displayName.localeCompare(b.displayName);
 
 function parseQuotaModels(raw) {
   if (!raw || typeof raw !== "object") throw new Error(T.invalidResp);
@@ -383,7 +425,7 @@ function parseQuotaModels(raw) {
     const q = m.quotaInfo || m.quota_info;
     if (!q || typeof q !== "object") continue;
     const resetMs = parseTimestamp(q.resetTime ?? q.reset_time);
-    let remaining = finite(q.remainingFraction) ? q.remainingFraction * 100 : finite(q.remaining_fraction) ? q.remaining_fraction * 100 : finite(q.remainingPercentage) ? q.remainingPercentage : finite(q.remaining_percentage) ? q.remaining_percentage : finite(resetMs) ? 0 : NaN;
+    const remaining = finite(q.remainingFraction) ? q.remainingFraction * 100 : finite(q.remaining_fraction) ? q.remaining_fraction * 100 : finite(q.remainingPercentage) ? q.remainingPercentage : finite(q.remaining_percentage) ? q.remaining_percentage : finite(resetMs) ? 0 : NaN;
     if (!finite(remaining)) continue;
     const displayName = String(m.displayName || m.display_name || "").trim() || prettifyModelId(id), family = inferFamily(id, displayName), low = `${id} ${displayName}`.toLowerCase();
     out.push({
@@ -454,30 +496,27 @@ function buildGroups(models) {
   return groups.sort((a, b) => a.leftPct - b.leftPct || (a.resetMs || Infinity) - (b.resetMs || Infinity) || a.title.localeCompare(b.title));
 }
 const flattenBuckets = groups => groups.flatMap(g => g.buckets || []).sort((a, b) => a.leftPct - b.leftPct || (a.resetMs || Infinity) - (b.resetMs || Infinity) || a.windowRank - b.windowRank);
+const stripCatalog = models => models.map(m => ({ id: m.id, displayName: m.displayName, family: m.family, isPrimary: m.isPrimary, isUtility: m.isUtility, recommended: m.recommended, pickerRank: finite(m.pickerRank) ? m.pickerRank : 9999, versionScore: m.versionScore, tierScore: m.tierScore, effortScore: m.effortScore }));
+const hydrateCatalog = (catalog, groups) => catalog.map(m => {
+  const grp = groups.find(g => g.family === m.family || ((m.family === "claude" || m.family === "gpt") && g.family === "claude")), b = grp && grp.buckets && grp.buckets[0];
+  return { ...m, pickerRank: m.pickerRank >= 9999 ? Infinity : m.pickerRank, leftPct: b ? b.leftPct : 100, resetMs: b ? b.resetMs : NaN };
+});
+
 function parseIneligibleReason(resp) {
   if (!resp || typeof resp !== "object") return "";
   const allowed = Array.isArray(resp.allowedTiers) ? resp.allowedTiers : [], ineligible = Array.isArray(resp.ineligibleTiers) ? resp.ineligibleTiers : [];
   const hasFree = (resp.currentTier && resp.currentTier.id === "free-tier") || allowed.some(t => t && t.id === "free-tier");
-  if (resp.gcpManaged !== true && !hasFree) {
-    const hit = ineligible.find(t => t && t.tierId === "free-tier" && typeof t.reasonMessage === "string" && t.reasonMessage.trim());
-    if (hit) return hit.reasonMessage.trim();
-  }
+  if (resp.gcpManaged !== true && !hasFree) { const hit = ineligible.find(t => t && t.tierId === "free-tier" && typeof t.reasonMessage === "string" && t.reasonMessage.trim()); if (hit) return hit.reasonMessage.trim(); }
   if (resp.currentTier) return "";
   const first = ineligible.find(t => t && typeof t.reasonMessage === "string" && t.reasonMessage.trim());
   return first ? first.reasonMessage.trim() : "";
 }
 function parseTier(resp) {
   if (!resp || typeof resp !== "object") return "";
-  const fmt = (name, id) => {
-    let s = String(name || "").trim().replace(/^google\s+(?=ai\s+\S)/i, "");
-    const v = id === "g1-ultra-lite-tier" ? "5x" : id === "g1-ultra-tier" ? "20x" : "";
-    return v && /ultra/i.test(s) && !/(5x|20x)/i.test(s) ? `${s} ${v}` : s;
-  };
+  const fmt = (name, id) => { let s = String(name || "").trim().replace(/^google\s+(?=ai\s+\S)/i, ""); const v = id === "g1-ultra-lite-tier" ? "5x" : id === "g1-ultra-tier" ? "20x" : ""; return v && /ultra/i.test(s) && !/(5x|20x)/i.test(s) ? `${s} ${v}` : s; };
   if (resp.paidTier && typeof resp.paidTier.name === "string" && resp.paidTier.name.trim()) return fmt(resp.paidTier.name, resp.paidTier.id);
   const id = resp.currentTier && resp.currentTier.id;
-  if (id === "free-tier") return "Free";
-  if (id === "standard-tier") return "Paid";
-  return resp.currentTier && typeof resp.currentTier.name === "string" && resp.currentTier.name.trim() ? fmt(resp.currentTier.name, id) : "";
+  return id === "free-tier" ? "Free" : id === "standard-tier" ? "Paid" : (resp.currentTier && typeof resp.currentTier.name === "string" && resp.currentTier.name.trim() ? fmt(resp.currentTier.name, id) : "");
 }
 
 // -- SQLite 历史趋势存储 --
@@ -512,7 +551,7 @@ async function recordSamples(accountKey, buckets) {
   } catch {}
 }
 
-// -- Worker 状态与刷新管线 --
+// -- Worker 状态与低风控单请求刷新管线 --
 let inputs = {}, accounts = [], activeIdx = null, lastConfiguredIdx = null, snapshot = null, error = "", inflight = null, viewMode = "grouped", search = "", selectedId = "", expandedGroups = new Set(), activity;
 const alertedCycles = {};
 try {
@@ -529,35 +568,71 @@ function updateNotchActivity(buckets) {
   alertedCycles[urgent.seriesKey] = cycle;
   activity = { id: `${urgent.seriesKey}:${cycle}:${clampPct(urgent.leftPct)}`, expiresAt: Date.now() + 8000 };
 }
-async function fetchAccountSnapshot(account) {
-  let lastErr = null;
+async function runAssistCheck(origin, token, projectId) {
+  const assist = await postCloudCode(origin, "loadCodeAssist", token, { metadata: { ideType: "ANTIGRAVITY" }, ...(projectId ? { cloudaicompanionProject: projectId } : {}) });
+  const ineligible = parseIneligibleReason(assist);
+  if (ineligible) throw Object.assign(new Error(ineligible), { status: 403 });
+  let nextProj = projectId;
+  if (!nextProj && assist && assist.cloudaicompanionProject) { const p = assist.cloudaicompanionProject; nextProj = typeof p === "string" ? p.trim() : String((p && (p.id || p.projectId)) || "").trim(); }
+  return { projectId: nextProj, plan: parseTier(assist) };
+}
+
+async function fetchAccountSnapshot(account, manual = false) {
+  let lastErr = null, current = account;
   const deadline = Date.now() + 11500;
   for (const origin of targetOrigins()) {
-    if (lastErr && Date.now() > deadline - 3500) break;
-    let token = await resolveAccessToken(account, false);
+    if (lastErr && (lastErr.network || Date.now() > deadline - 3500)) break;
+    let token = await resolveAccessToken(current, false);
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
-        let projectId = account.projectId || "", plan = "";
-        try {
-          const assist = await postCloudCode(origin, "loadCodeAssist", token, { metadata: { ideType: "ANTIGRAVITY" }, ...(projectId ? { cloudaicompanionProject: projectId } : {}) });
-          const ineligible = parseIneligibleReason(assist);
-          if (ineligible) throw Object.assign(new Error(ineligible), { status: 403 });
-          if (!projectId && assist && assist.cloudaicompanionProject) { const p = assist.cloudaicompanionProject; projectId = typeof p === "string" ? p.trim() : String((p && (p.id || p.projectId)) || "").trim(); }
-          plan = parseTier(assist);
-        } catch (e) { if (e && (e.status === 401 || e.status === 403)) throw e; }
-        const reqBody = projectId ? { project: projectId } : {};
-        const [modelsRes, summaryRes] = await Promise.allSettled([postCloudCode(origin, "fetchAvailableModels", token, reqBody), postCloudCode(origin, "retrieveUserQuotaSummary", token, reqBody)]);
-        const reqErrs = [modelsRes, summaryRes].filter(r => r.status === "rejected").map(r => r.reason), fatal = reqErrs.find(e => e && (e.status === 401 || e.status === 429));
-        if (fatal) throw fatal;
-        let models = modelsRes.status === "fulfilled" ? parseQuotaModels(modelsRes.value) : [];
-        let groups = summaryRes.status === "fulfilled" ? parseQuotaSummaryGroups(summaryRes.value, models) : [];
-        if (!groups.length && models.length) groups = buildGroups(models);
-        if (!models.length && groups.length) models = groups.flatMap(g => g.buckets.map(b => ({ id: b.id, displayName: b.title, family: b.family, isPrimary: b.family === "gemini", leftPct: b.leftPct, resetMs: b.resetMs, isUtility: 0, recommended: 0, pickerRank: Infinity, versionScore: 0, tierScore: 0, effortScore: 0 })));
-        if (!models.length && !groups.length) throw reqErrs[0] || lastErr || new Error(T.networkError);
-        const email = account.email || (await fetchUserEmail(token, account.key));
-        return { accountKey: account.key, accountLabel: email || account.label, plan, origin, models, groups, buckets: flattenBuckets(groups), fetchedAt: Date.now() };
+        const meta = readAccountMeta(current.key);
+        let projectId = current.projectId || (meta && meta.projectId) || "", plan = (meta && meta.plan) || "", metaFresh = Boolean(meta);
+        if (!metaFresh) {
+          try { const res = await runAssistCheck(origin, token, projectId); projectId = res.projectId; plan = res.plan; }
+          catch (e) { if (e && (e.status === 401 || e.status === 403)) throw e; }
+        }
+        let summaryRaw = null, summaryErr = null;
+        try { summaryRaw = await postCloudCode(origin, "retrieveUserQuotaSummary", token, projectId ? { project: projectId } : {}); }
+        catch (e) {
+          if (e && e.status === 403 && metaFresh) {
+            const res = await runAssistCheck(origin, token, ""); projectId = res.projectId; plan = res.plan; metaFresh = false;
+            summaryRaw = await postCloudCode(origin, "retrieveUserQuotaSummary", token, projectId ? { project: projectId } : {});
+          } else if (e && (e.status === 401 || e.status === 429 || e.network)) throw e;
+          else summaryErr = e;
+        }
+        let catalog = meta && Array.isArray(meta.catalog) ? meta.catalog : [];
+        let groups = summaryRaw ? parseQuotaSummaryGroups(summaryRaw, catalog) : [];
+        const needModels = !groups.length || viewMode === "grid" || !catalog.length;
+        let models = [], modelsLive = false;
+        if (needModels) {
+          try {
+            models = parseQuotaModels(await postCloudCode(origin, "fetchAvailableModels", token, projectId ? { project: projectId } : {}));
+            modelsLive = true;
+            if (models.length) catalog = stripCatalog(models);
+            if (summaryRaw) groups = parseQuotaSummaryGroups(summaryRaw, models);
+            if (!groups.length && models.length) groups = buildGroups(models);
+          } catch (e) {
+            if (e && (e.status === 401 || e.status === 429)) throw e;
+            if (!groups.length) throw summaryErr || e;
+          }
+        }
+        if (!models.length) {
+          models = catalog.length ? hydrateCatalog(catalog, groups)
+            : groups.flatMap(g => g.buckets.map(b => ({ id: b.id, displayName: b.title, family: b.family, isPrimary: b.family === "gemini", leftPct: b.leftPct, resetMs: b.resetMs, isUtility: 0, recommended: 0, pickerRank: Infinity, versionScore: 0, tierScore: 0, effortScore: 0 })));
+        }
+        if (!groups.length && !models.length) throw summaryErr || new Error(T.noModels);
+        let email = current.email || (meta && meta.email) || emailCache.get(current.key) || "";
+        if (!email && !(meta && meta.emailChecked)) email = await fetchUserEmail(token, current.key);
+        writeJsonStorage(`antigravity.meta.${current.key}`, { projectId, plan, email, emailChecked: true, catalog, ts: metaFresh ? meta.ts : Date.now() });
+        writeJsonStorage("antigravity.origin", { origin, ts: Date.now() });
+        return { accountKey: current.key, accountLabel: email || current.label, plan, origin, models, modelsLive, groups, buckets: flattenBuckets(groups), fetchedAt: Date.now() };
       } catch (e) {
-        if (e && e.status === 401 && attempt === 0 && account.refreshToken) { token = await resolveAccessToken(account, true); continue; }
+        if (e && e.status === 401 && attempt === 0) {
+          if (current.refreshToken) { try { token = await resolveAccessToken(current, true); continue; } catch {} }
+          if (manual) { forceCredReload = true; const reloaded = await readAuthAccounts(true); accounts = reloaded.accounts; current = pickTargetAccount(reloaded); token = await resolveAccessToken(current, false); continue; }
+          cachedAuth = null;
+          throw new Error(T.tokenExpired);
+        }
         lastErr = e;
         if (e && (e.status === 401 || e.status === 403 || e.status === 429)) throw e;
         break;
@@ -566,21 +641,22 @@ async function fetchAccountSnapshot(account) {
   }
   throw lastErr || new Error(T.networkError);
 }
-async function load() {
-  const parsed = await readAuthAccounts();
+
+async function load(manual = false) {
+  const parsed = await readAuthAccounts(manual);
   accounts = parsed.accounts;
   const rawIdx = inputs.accountIndex, configuredIdx = rawIdx !== undefined && rawIdx !== null && rawIdx !== "" && Number.isInteger(Number(rawIdx)) ? Number(rawIdx) : null;
   if (configuredIdx !== null && configuredIdx !== lastConfiguredIdx) { lastConfiguredIdx = configuredIdx; if (activeIdx === null || configuredIdx !== 0) activeIdx = configuredIdx; }
   if (activeIdx === null || activeIdx < 0 || activeIdx >= accounts.length) activeIdx = Math.max(0, Math.min(accounts.length - 1, configuredIdx && configuredIdx > 0 ? configuredIdx : parsed.defaultIdx));
-  const next = await fetchAccountSnapshot(accounts[activeIdx] || accounts[0]);
+  const next = await fetchAccountSnapshot(accounts[activeIdx] || accounts[0], manual);
   snapshot = next; await recordSamples(next.accountKey, next.buckets); updateNotchActivity(next.buckets);
 }
-function refresh() {
+function refresh(manual = false) {
   if (inflight) return inflight;
-  inflight = load().then(() => { error = ""; }).catch(e => { error = String((e && e.message) || e); }).finally(() => { inflight = null; $metrix.invalidate(); });
+  inflight = load(manual).then(() => { error = ""; }).catch(e => { error = String((e && e.message) || e); }).finally(() => { inflight = null; $metrix.invalidate(); });
   $metrix.invalidate(); return inflight;
 }
-const launchRefresh = () => { void refresh(); };
+const launchRefresh = (manual = false) => { void refresh(manual); };
 async function copyText(str) {
   try {
     if (typeof navigator !== "undefined" && navigator.clipboard && typeof ClipboardItem === "function") await navigator.clipboard.write([new ClipboardItem({ "text/plain": new Blob([str], { type: "text/plain" }) })]);
@@ -590,149 +666,78 @@ async function copyText(str) {
 const buildSummaryText = () => (snapshot && snapshot.groups.length ? snapshot.groups.map(g => `${g.title}: ${g.buckets.map(b => `${b.label} ${pctText(b.leftPct)} (${formatCountdown(b.resetMs)})`).join(" / ")}`).join(" | ") : TITLE);
 
 // -- 原生面板组件 --
-const IconButton = (name, label, onClick, busy = false) => h("Column", {
-  width: 28, height: 28, center: true, radius: 7, shrink: 0, label, tooltip: label, cursor: "pointer",
-  hover: { background: K.hover }, pressed: { background: K.press }, onClick,
-}, Icon(name, 15, K.muted, busy ? { keyframes: { duration: 900, repeat: -1, ease: "linear", frames: [{ at: 0, rotate: 0 }, { at: 1, rotate: 360 }] } } : null));
-
+const IconButton = (name, label, onClick, busy = false) => h("Column", { width: 28, height: 28, center: true, radius: 7, shrink: 0, label, tooltip: label, cursor: "pointer", hover: { background: K.hover }, pressed: { background: K.press }, onClick }, Icon(name, 15, K.muted, busy ? { keyframes: { duration: 900, repeat: -1, ease: "linear", frames: [{ at: 0, rotate: 0 }, { at: 1, rotate: 360 }] } } : null));
 function Header() {
   const plan = snapshot && snapshot.plan, acct = snapshot && snapshot.accountLabel;
   return h("Row", { gap: 8, padding: [12, 14, 8, 16], alignItems: "center", fillWidth: true },
     Icon("mark", 18, "accent"),
     h("Column", { gap: 1, grow: 1, minWidth: 0 },
-      h("Row", { gap: 6, alignItems: "center", minWidth: 0 },
-        TX(TITLE, { fontSize: 14, fontWeight: 600, singleLine: true }),
-        plan ? h("Badge", { text: plan, fontSize: 10, fontWeight: 600, textColor: "accentText", background: "accent" }) : null),
+      h("Row", { gap: 6, alignItems: "center", minWidth: 0 }, TX(TITLE, { fontSize: 14, fontWeight: 600, singleLine: true }), plan ? h("Badge", { text: plan, fontSize: 10, fontWeight: 600, textColor: "accentText", background: "accent" }) : null),
       acct ? TX(acct, { fontSize: 11, textColor: K.muted, singleLine: true }) : null),
-    IconButton("copy", T.copySummary, () => copyText(buildSummaryText())),
-    IconButton("refresh", T.refresh, launchRefresh, inflight !== null));
+    IconButton("copy", T.copySummary, () => copyText(buildSummaryText())), IconButton("refresh", T.refresh, () => launchRefresh(true), inflight !== null));
 }
 function SummaryStrip(models, buckets) {
   const lowest = buckets[0], soonest = [...buckets, ...models].filter(m => finite(m.resetMs)).sort((a, b) => a.resetMs - b.resetMs)[0];
-  const tile = (label, value, color = "text") => h("Column", { gap: 2, padding: [8, 10], radius: 8, background: K.hover, minWidth: 0 },
-    TX(label, { fontSize: 11, textColor: K.muted, singleLine: true }),
-    TX(value, { fontSize: 16, fontWeight: 650, textColor: color, fontFeatures: "tnum", singleLine: true }));
-  return h("Grid", { columns: 3, gap: 8, fillWidth: true },
-    tile(T.lowestQuota, lowest ? pctText(lowest.leftPct) : "—", lowest ? quotaTone(lowest.leftPct) : K.muted),
-    tile(T.activeModels, String(models.length)),
-    tile(T.nextReset, soonest ? formatCountdown(soonest.resetMs) : "—"));
+  const tile = (label, value, color = "text") => h("Column", { gap: 2, padding: [8, 10], radius: 8, background: K.hover, minWidth: 0 }, TX(label, { fontSize: 11, textColor: K.muted, singleLine: true }), TX(value, { fontSize: 16, fontWeight: 650, textColor: color, fontFeatures: "tnum", singleLine: true }));
+  return h("Grid", { columns: 3, gap: 8, fillWidth: true }, tile(T.lowestQuota, lowest ? pctText(lowest.leftPct) : "—", lowest ? quotaTone(lowest.leftPct) : K.muted), tile(T.activeModels, String(models.length)), tile(T.nextReset, soonest ? formatCountdown(soonest.resetMs) : "—"));
 }
-const QuotaBar = leftPct => {
-  const pct = Math.max(0, Math.min(100, leftPct));
-  return h("Box", { height: 6, radius: 3, background: K.track, fillWidth: true },
-    pct > 0 ? h("Box", { absolute: true, top: 0, left: 0, height: 6, radius: 3, widthPercent: Math.max(pct, 2), background: quotaTone(leftPct) }) : null);
-};
+const QuotaBar = leftPct => { const pct = Math.max(0, Math.min(100, leftPct)); return h("Box", { height: 6, radius: 3, background: K.track, fillWidth: true }, pct > 0 ? h("Box", { absolute: true, top: 0, left: 0, height: 6, radius: 3, widthPercent: Math.max(pct, 2), background: quotaTone(leftPct) }) : null); };
 function ModelCard(m) {
   const active = selectedId === m.id, tone = quotaTone(m.leftPct);
-  return h("Column", {
-    key: `card-${m.id}`, gap: 8, padding: [11, 12], radius: 10, background: "surface",
-    border: [1, active ? "accent" : "border"], minWidth: 0, fillWidth: true, cursor: "pointer", hover: { background: K.hover },
-    onClick: () => { selectedId = m.id; void copyText(m.id); $metrix.invalidate(); },
-  },
-    h("Row", { gap: 6, alignItems: "center", fillWidth: true, minWidth: 0 },
-      Icon(m.isPrimary ? "sparkle" : "bot", 14, active ? "accent" : "textMuted"),
-      TX(m.displayName, { fontSize: 13, fontWeight: 600, textColor: active ? "accent" : "text", singleLine: true, grow: 1, shrink: 1, minWidth: 0 }),
-      TX(pctText(m.leftPct), { fontSize: 11, fontWeight: 650, fontFeatures: "tnum", textColor: tone, background: K.hover, radius: 5, padding: [2, 6], shrink: 0 })),
-    h("Row", { fillWidth: true, minWidth: 0 },
-      TX(m.id, { fontSize: 11, font: "monospace", textColor: "accent", background: "accentSubtle", radius: 4, padding: [2, 6], singleLine: true, shrink: 1, minWidth: 0 })),
+  return h("Column", { key: `card-${m.id}`, gap: 8, padding: [11, 12], radius: 10, background: "surface", border: [1, active ? "accent" : "border"], minWidth: 0, fillWidth: true, cursor: "pointer", hover: { background: K.hover }, onClick: () => { selectedId = m.id; void copyText(m.id); $metrix.invalidate(); } },
+    h("Row", { gap: 6, alignItems: "center", fillWidth: true, minWidth: 0 }, Icon(m.isPrimary ? "sparkle" : "bot", 14, active ? "accent" : "textMuted"), TX(m.displayName, { fontSize: 13, fontWeight: 600, textColor: active ? "accent" : "text", singleLine: true, grow: 1, shrink: 1, minWidth: 0 }), TX(pctText(m.leftPct), { fontSize: 11, fontWeight: 650, fontFeatures: "tnum", textColor: tone, background: K.hover, radius: 5, padding: [2, 6], shrink: 0 })),
+    h("Row", { fillWidth: true, minWidth: 0 }, TX(m.id, { fontSize: 11, font: "monospace", textColor: "accent", background: "accentSubtle", radius: 4, padding: [2, 6], singleLine: true, shrink: 1, minWidth: 0 })),
     QuotaBar(m.leftPct),
-    h("Row", { gap: 5, alignItems: "center", fillWidth: true, minWidth: 0 },
-      Icon("clock", 11, K.muted), TX(formatResetStamp(m.resetMs), { fontSize: 10, textColor: K.muted, fontFeatures: "tnum", singleLine: true, shrink: 1, minWidth: 0 }),
-      h("Spacer"), TX(formatCountdown(m.resetMs), { fontSize: 11, fontWeight: 500, textColor: K.muted, fontFeatures: "tnum", shrink: 0 })));
+    h("Row", { gap: 5, alignItems: "center", fillWidth: true, minWidth: 0 }, Icon("clock", 11, K.muted), TX(formatResetStamp(m.resetMs), { fontSize: 10, textColor: K.muted, fontFeatures: "tnum", singleLine: true, shrink: 1, minWidth: 0 }), h("Spacer"), TX(formatCountdown(m.resetMs), { fontSize: 11, fontWeight: 500, textColor: K.muted, fontFeatures: "tnum", shrink: 0 })));
 }
 const BucketCard = b => h("Column", { key: `b-${b.key}`, gap: 7, padding: [10, 11], radius: 9, background: K.hover, border: [1, "border"], fillWidth: true, minWidth: 0 },
-  h("Row", { gap: 6, alignItems: "center", fillWidth: true, minWidth: 0 },
-    TX(b.label, { fontSize: 12, fontWeight: 700, singleLine: true, grow: 1, shrink: 1, minWidth: 0 }),
-    TX(pctText(b.leftPct), { fontSize: 11, fontWeight: 650, fontFeatures: "tnum", textColor: quotaTone(b.leftPct), background: "surface", radius: 5, padding: [2, 6], shrink: 0 })),
+  h("Row", { gap: 6, alignItems: "center", fillWidth: true, minWidth: 0 }, TX(b.label, { fontSize: 12, fontWeight: 700, singleLine: true, grow: 1, shrink: 1, minWidth: 0 }), TX(pctText(b.leftPct), { fontSize: 11, fontWeight: 650, fontFeatures: "tnum", textColor: quotaTone(b.leftPct), background: "surface", radius: 5, padding: [2, 6], shrink: 0 })),
   QuotaBar(b.leftPct),
-  h("Row", { gap: 4, alignItems: "center", fillWidth: true, minWidth: 0 },
-    Icon("clock", 11, K.muted), TX(formatResetStamp(b.resetMs), { fontSize: 10, textColor: K.muted, fontFeatures: "tnum", singleLine: true, shrink: 1, minWidth: 0 }),
-    h("Spacer"), TX(formatCountdown(b.resetMs), { fontSize: 11, fontWeight: 600, textColor: "text", fontFeatures: "tnum", shrink: 0 })));
+  h("Row", { gap: 4, alignItems: "center", fillWidth: true, minWidth: 0 }, Icon("clock", 11, K.muted), TX(formatResetStamp(b.resetMs), { fontSize: 10, textColor: K.muted, fontFeatures: "tnum", singleLine: true, shrink: 1, minWidth: 0 }), h("Spacer"), TX(formatCountdown(b.resetMs), { fontSize: 11, fontWeight: 600, textColor: "text", fontFeatures: "tnum", shrink: 0 })));
 
 function GroupCard(g, gridCols, forceExpand) {
   const expanded = forceExpand || expandedGroups.has(g.key), models = g.models || [], uniqueNames = [];
   for (const m of models) { const base = m.displayName.replace(/\s*\([^)]*\)\s*$/, "").trim(); if (base && !uniqueNames.includes(base)) { uniqueNames.push(base); if (uniqueNames.length === 3) break; } }
   const preview = uniqueNames.join(", "), cols = g.buckets.length > 1 && gridCols > 1 ? 2 : 1;
   return h("Column", { key: `grp-${g.key}`, gap: 10, padding: [12, 13], radius: 11, background: "surface", border: [1, "border"], fillWidth: true, minWidth: 0 },
-    h("Row", { gap: 8, alignItems: "center", fillWidth: true, minWidth: 0 },
-      Icon(g.family === "gemini" ? "sparkle" : "bot", 15, "accent"),
-      TX(g.title, { fontSize: 13, fontWeight: 650, singleLine: true, shrink: 0 }),
-      preview ? TX(`${preview}${models.length > uniqueNames.length ? " …" : ""}`, { fontSize: 11, textColor: K.muted, singleLine: true, grow: 1, shrink: 1, minWidth: 0, textAlign: "end" }) : h("Spacer")),
+    h("Row", { gap: 8, alignItems: "center", fillWidth: true, minWidth: 0 }, Icon(g.family === "gemini" ? "sparkle" : "bot", 15, "accent"), TX(g.title, { fontSize: 13, fontWeight: 650, singleLine: true, shrink: 0 }), preview ? TX(`${preview}${models.length > uniqueNames.length ? " …" : ""}`, { fontSize: 11, textColor: K.muted, singleLine: true, grow: 1, shrink: 1, minWidth: 0, textAlign: "end" }) : h("Spacer")),
     h("Grid", { columns: cols, gap: 8, fillWidth: true }, g.buckets.map(BucketCard)),
-    models.length && expanded
-      ? h("Row", { gap: 5, wrap: true, fillWidth: true }, models.map(m => h("Row", {
-          key: `chip-${m.id}`, padding: [2, 6], radius: 4, background: selectedId === m.id ? "accent" : "accentSubtle",
-          cursor: "pointer", tooltip: `${m.displayName} (${m.id})`, onClick: () => { selectedId = m.id; void copyText(m.id); $metrix.invalidate(); },
-        }, TX(m.id, { fontSize: 10, font: "monospace", textColor: selectedId === m.id ? "accentText" : "accent", singleLine: true }))))
-      : null,
-    models.length && !forceExpand
-      ? h("Row", { gap: 4, alignItems: "center", cursor: "pointer", onClick: () => { if (expanded) expandedGroups.delete(g.key); else expandedGroups.add(g.key); $metrix.invalidate(); } },
-          Icon(expanded ? "chevronDown" : "chevronRight", 12, K.muted),
-          TX(expanded ? T.collapse : fill(T.showAll, { n: models.length }), { fontSize: 11, textColor: K.muted }))
-      : null);
+    models.length && expanded ? h("Row", { gap: 5, wrap: true, fillWidth: true }, models.map(m => h("Row", { key: `chip-${m.id}`, padding: [2, 6], radius: 4, background: selectedId === m.id ? "accent" : "accentSubtle", cursor: "pointer", tooltip: `${m.displayName} (${m.id})`, onClick: () => { selectedId = m.id; void copyText(m.id); $metrix.invalidate(); } }, TX(m.id, { fontSize: 10, font: "monospace", textColor: selectedId === m.id ? "accentText" : "accent", singleLine: true })))) : null,
+    models.length && !forceExpand ? h("Row", { gap: 4, alignItems: "center", cursor: "pointer", onClick: () => { if (expanded) expandedGroups.delete(g.key); else expandedGroups.add(g.key); $metrix.invalidate(); } }, Icon(expanded ? "chevronDown" : "chevronRight", 12, K.muted), TX(expanded ? T.collapse : fill(T.showAll, { n: models.length }), { fontSize: 11, textColor: K.muted })) : null);
 }
 function TrendSection(buckets) {
   const lead = buckets[0], samples = lead ? (trends[lead.seriesKey] || []) : [];
   if (!lead || samples.length < 2) return null;
   return h("Column", { gap: 6, padding: [10, 12], radius: 10, background: "surface", border: [1, "border"], fillWidth: true },
-    h("Row", { gap: 6, alignItems: "center", fillWidth: true },
-      TX(`${T.trend} · ${lead.title}`, { fontSize: 11, fontWeight: 600, textColor: K.muted, grow: 1, singleLine: true }),
-      TX(pctText(lead.leftPct), { fontSize: 11, fontWeight: 600, fontFeatures: "tnum", textColor: quotaTone(lead.leftPct) })),
-    h("Chart", {
-      type: "area", height: 76, fillWidth: true, xKind: "time", yDomain: [0, 100], xTicks: 3, yTicks: 3, curve: "linear", legend: false, hover: true, appear: false, strokeWidth: 1.6,
-      series: [{ name: T.remaining, color: quotaTone(lead.leftPct), fill: { from: 0.18, to: 0 }, points: samples.map(s => ({ x: s.ts, y: s.left_pct, valueLabel: pctText(s.left_pct) })) }],
-    }));
+    h("Row", { gap: 6, alignItems: "center", fillWidth: true }, TX(`${T.trend} · ${lead.title}`, { fontSize: 11, fontWeight: 600, textColor: K.muted, grow: 1, singleLine: true }), TX(pctText(lead.leftPct), { fontSize: 11, fontWeight: 600, fontFeatures: "tnum", textColor: quotaTone(lead.leftPct) })),
+    h("Chart", { type: "area", height: 76, fillWidth: true, xKind: "time", yDomain: [0, 100], xTicks: 3, yTicks: 3, curve: "linear", legend: false, hover: true, appear: false, strokeWidth: 1.6, series: [{ name: T.remaining, color: quotaTone(lead.leftPct), fill: { from: 0.18, to: 0 }, points: samples.map(s => ({ x: s.ts, y: s.left_pct, valueLabel: pctText(s.left_pct) })) }] }));
 }
-const Skeleton = () => h("Column", { gap: 12, padding: [12, 16, 16, 16], fillWidth: true },
-  h("Grid", { columns: 3, gap: 8, fillWidth: true }, [0, 1, 2].map(i => h("Box", { key: `sk-t-${i}`, width: "100%", height: 50, radius: 8, background: K.hover, shrink: 0 }))),
-  [0, 1, 2].map(i => h("Box", { key: `sk-c-${i}`, width: "100%", height: 96, radius: 8, background: K.hover, shrink: 0 })));
-const Problem = detail => h("Column", { grow: 1, center: true, gap: 8, padding: [28, 24] },
-  Icon("alert", 22, "danger"), TX(T.failed, { fontSize: 14, fontWeight: 600, textAlign: "center" }),
-  TX(detail, { fontSize: 12, textColor: K.muted, textAlign: "center", lineHeight: 1.4, wrap: true }),
-  h("Row", { margin: [6, 0, 0, 0] }, h("Button", { onClick: launchRefresh }, T.tryAgain)));
+const Skeleton = () => h("Column", { gap: 12, padding: [12, 16, 16, 16], fillWidth: true }, h("Grid", { columns: 3, gap: 8, fillWidth: true }, [0, 1, 2].map(i => h("Box", { key: `sk-t-${i}`, width: "100%", height: 50, radius: 8, background: K.hover, shrink: 0 }))), [0, 1, 2].map(i => h("Box", { key: `sk-c-${i}`, width: "100%", height: 96, radius: 8, background: K.hover, shrink: 0 })));
+const Problem = detail => h("Column", { grow: 1, center: true, gap: 8, padding: [28, 24] }, Icon("alert", 22, "danger"), TX(T.failed, { fontSize: 14, fontWeight: 600, textAlign: "center" }), TX(detail, { fontSize: 12, textColor: K.muted, textAlign: "center", lineHeight: 1.4, wrap: true }), h("Row", { margin: [6, 0, 0, 0] }, h("Button", { onClick: () => launchRefresh(true) }, T.tryAgain)));
 
 function Body(env) {
   if (!snapshot) return error ? Problem(error) : Skeleton();
   const q = search.trim().toLowerCase(), gridCols = env && env.viewport && finite(env.viewport.width) && env.viewport.width < 400 ? 1 : 2;
   const filtered = q ? snapshot.models.filter(m => `${m.displayName} ${m.id}`.toLowerCase().includes(q)) : snapshot.models;
-  const groups = q
-    ? snapshot.groups.map(g => {
-        const ms = (g.models || []).filter(m => `${m.displayName} ${m.id}`.toLowerCase().includes(q));
-        const hitTitle = `${g.title} ${g.buckets.map(b => b.label).join(" ")}`.toLowerCase().includes(q);
-        return ms.length || hitTitle ? { ...g, models: ms.length ? ms : g.models } : null;
-      }).filter(Boolean)
-    : snapshot.groups;
+  const groups = q ? snapshot.groups.map(g => { const ms = (g.models || []).filter(m => `${m.displayName} ${m.id}`.toLowerCase().includes(q)); return ms.length || `${g.title} ${g.buckets.map(b => b.label).join(" ")}`.toLowerCase().includes(q) ? { ...g, models: ms.length ? ms : g.models } : null; }).filter(Boolean) : snapshot.groups;
   return h("Column", { gap: 12, padding: [8, 14, 14, 14], fillWidth: true, minWidth: 0 },
     error ? h("Row", { gap: 8, padding: [8, 10], radius: 8, background: K.hover, alignItems: "center", fillWidth: true }, Icon("alert", 14, "danger"), TX(error, { fontSize: 12, grow: 1, shrink: 1, minWidth: 0, wrap: true })) : null,
-    accounts.length > 1 ? h("Select", {
-      key: "acct-select", value: String(activeIdx ?? 0), fillWidth: true, items: accounts.map((a, i) => ({ label: a.label, value: String(i) })),
-      onChange: v => { const idx = Number(v); if (Number.isInteger(idx) && idx >= 0 && idx < accounts.length) { activeIdx = idx; try { localStorage.setItem("antigravity.accountIdx", String(idx)); } catch {} launchRefresh(); } },
-    }) : null,
+    accounts.length > 1 ? h("Select", { key: "acct-select", value: String(activeIdx ?? 0), fillWidth: true, items: accounts.map((a, i) => ({ label: a.label, value: String(i) })), onChange: v => { const idx = Number(v); if (Number.isInteger(idx) && idx >= 0 && idx < accounts.length) { activeIdx = idx; try { localStorage.setItem("antigravity.accountIdx", String(idx)); } catch {} launchRefresh(false); } } }) : null,
     SummaryStrip(snapshot.models, snapshot.buckets),
     h("Row", { gap: 8, alignItems: "center", fillWidth: true },
       h("SearchField", { key: "model-search", value: search, placeholder: T.searchPlaceholder, grow: 1, onChange: v => { search = String(v); $metrix.invalidate(); } }),
-      h("Segmented", {
-        key: "view-mode", value: viewMode, items: [{ label: T.viewGrouped, value: "grouped" }, { label: T.viewGrid, value: "grid" }],
-        onChange: v => { viewMode = v === "grid" ? "grid" : "grouped"; try { localStorage.setItem("antigravity.viewMode", viewMode); } catch {} $metrix.invalidate(); },
-      })),
-    !snapshot.models.length && !snapshot.groups.length
-      ? h("Column", { padding: [20, 12], center: true }, TX(T.noModels, { fontSize: 12, textColor: K.muted, textAlign: "center", wrap: true }))
-      : viewMode === "grid"
-        ? (!filtered.length ? h("Column", { padding: [20, 12], center: true }, TX(T.noMatch, { fontSize: 12, textColor: K.muted, textAlign: "center" })) : h("Grid", { columns: gridCols, gap: 10, fillWidth: true }, filtered.map(ModelCard)))
-        : (!groups.length ? h("Column", { padding: [20, 12], center: true }, TX(T.noMatch, { fontSize: 12, textColor: K.muted, textAlign: "center" })) : h("Column", { gap: 10, fillWidth: true }, groups.map(g => GroupCard(g, gridCols, Boolean(q))))),
+      h("Segmented", { key: "view-mode", value: viewMode, items: [{ label: T.viewGrouped, value: "grouped" }, { label: T.viewGrid, value: "grid" }], onChange: v => { viewMode = v === "grid" ? "grid" : "grouped"; try { localStorage.setItem("antigravity.viewMode", viewMode); } catch {} if (viewMode === "grid" && snapshot && !snapshot.modelsLive && !inflight) launchRefresh(false); else $metrix.invalidate(); } })),
+    !snapshot.models.length && !snapshot.groups.length ? h("Column", { padding: [20, 12], center: true }, TX(T.noModels, { fontSize: 12, textColor: K.muted, textAlign: "center", wrap: true }))
+      : viewMode === "grid" ? (!filtered.length ? h("Column", { padding: [20, 12], center: true }, TX(T.noMatch, { fontSize: 12, textColor: K.muted, textAlign: "center" })) : h("Grid", { columns: gridCols, gap: 10, fillWidth: true }, filtered.map(ModelCard)))
+      : (!groups.length ? h("Column", { padding: [20, 12], center: true }, TX(T.noMatch, { fontSize: 12, textColor: K.muted, textAlign: "center" })) : h("Column", { gap: 10, fillWidth: true }, groups.map(g => GroupCard(g, gridCols, Boolean(q))))),
     !q ? TrendSection(snapshot.buckets) : null);
 }
 function Footer() {
   const ageText = snapshot && snapshot.fetchedAt ? formatUpdated(snapshot.fetchedAt) : error ? T.failed : T.loading;
   const host = snapshot && snapshot.origin ? snapshot.origin.replace(/^https?:\/\//, "") : "daily-cloudcode-pa.googleapis.com";
-  return h("Row", { gap: 6, padding: [7, 14], alignItems: "center", fillWidth: true },
-    TX(host, { fontSize: 10, textColor: K.muted, singleLine: true, shrink: 1, minWidth: 0 }), h("Spacer"),
-    TX(ageText, { fontSize: 10, textColor: K.muted, fontFeatures: "tnum", shrink: 0 }));
+  return h("Row", { gap: 6, padding: [7, 14], alignItems: "center", fillWidth: true }, TX(host, { fontSize: 10, textColor: K.muted, singleLine: true, shrink: 1, minWidth: 0 }), h("Spacer"), TX(ageText, { fontSize: 10, textColor: K.muted, fontFeatures: "tnum", shrink: 0 }));
 }
-const panelTree = env => h("Column", {
-  preferredWidth: 540, preferredHeight: 620, fill: true, minHeight: 0, safeArea: true,
-  fontSize: 13, textColor: "text", shortcuts: { "CmdOrCtrl+R": launchRefresh },
-}, Header(), h("Divider"), h("Scroll", { grow: 1, minHeight: 0, fillWidth: true }, Body(env)), h("Divider"), Footer());
+const panelTree = env => h("Column", { preferredWidth: 540, preferredHeight: 620, fill: true, minHeight: 0, safeArea: true, fontSize: 13, textColor: "text", shortcuts: { "CmdOrCtrl+R": () => launchRefresh(true) } }, Header(), h("Divider"), h("Scroll", { grow: 1, minHeight: 0, fillWidth: true }, Body(env)), h("Divider"), Footer());
 
 // -- 托盘、刘海与桌面小组件 --
 function trayTree() {
@@ -740,37 +745,22 @@ function trayTree() {
   return {
     icon: "data:image/svg+xml," + encodeURIComponent(BRAND), iconTemplate: true, title: lead ? pctText(lead.leftPct) : "", error,
     tooltip: lead ? `${TITLE} · ${pctText(lead.leftPct)} · ${fill(T.modelsCount, { n: count })} · ${formatCountdown(lead.resetMs)}` : TITLE,
-    menu: [{ label: T.refresh, onClick: launchRefresh }, { label: T.copySummary, onClick: () => copyText(buildSummaryText()), disabled: !lead }],
+    menu: [{ label: T.refresh, onClick: () => launchRefresh(true) }, { label: T.copySummary, onClick: () => copyText(buildSummaryText()), disabled: !lead }],
   };
 }
 function notchExpanded(buckets) {
   if (!snapshot) return h("Column", { padding: [16, 12], fillWidth: true, center: true }, TX(error || T.loading, { fontSize: 12, textColor: K.muted, textAlign: "center", wrap: true }));
   if (!buckets.length) return h("Column", { padding: [16, 12], fillWidth: true, center: true }, TX(T.noModels, { fontSize: 12, textColor: K.muted, textAlign: "center" }));
-  return h("Column", { gap: 10, padding: [10, 12], fillWidth: true },
-    buckets.slice(0, 4).map(b => h("Column", { key: `n-${b.key}`, gap: 4, fillWidth: true },
-      h("Row", { gap: 8, alignItems: "center", fillWidth: true },
-        TX(b.title, { fontSize: 12, fontWeight: 500, singleLine: true, grow: 1, shrink: 1, minWidth: 0 }),
-        TX(formatCountdown(b.resetMs), { fontSize: 11, textColor: K.muted, fontFeatures: "tnum", shrink: 0 }),
-        TX(pctText(b.leftPct), { fontSize: 12, fontWeight: 600, fontFeatures: "tnum", textColor: quotaTone(b.leftPct), shrink: 0 })),
-      QuotaBar(b.leftPct))));
+  return h("Column", { gap: 10, padding: [10, 12], fillWidth: true }, buckets.slice(0, 4).map(b => h("Column", { key: `n-${b.key}`, gap: 4, fillWidth: true },
+    h("Row", { gap: 8, alignItems: "center", fillWidth: true }, TX(b.title, { fontSize: 12, fontWeight: 500, singleLine: true, grow: 1, shrink: 1, minWidth: 0 }), TX(formatCountdown(b.resetMs), { fontSize: 11, textColor: K.muted, fontFeatures: "tnum", shrink: 0 }), TX(pctText(b.leftPct), { fontSize: 12, fontWeight: 600, fontFeatures: "tnum", textColor: quotaTone(b.leftPct), shrink: 0 })), QuotaBar(b.leftPct))));
 }
 function notchTree() {
   const buckets = (snapshot && snapshot.buckets) || [], lead = buckets[0] || null, tone = lead ? quotaTone(lead.leftPct) : "text";
   const notchState = typeof $metrix.outputs === "function" ? ($metrix.outputs() || {}).notch : undefined;
-  return {
-    compact: { leading: Icon("mark", 16, "text"), trailing: lead ? TX(pctText(lead.leftPct), { fontSize: 12, fontWeight: 650, fontFeatures: "tnum", textColor: tone === "success" ? "text" : tone }) : null },
-    minimal: Icon("mark", 14, tone === "success" ? "text" : tone),
-    expanded: notchState === "expanded" ? notchExpanded(buckets) : undefined,
-    activity,
-  };
+  return { compact: { leading: Icon("mark", 16, "text"), trailing: lead ? TX(pctText(lead.leftPct), { fontSize: 12, fontWeight: 650, fontFeatures: "tnum", textColor: tone === "success" ? "text" : tone }) : null }, minimal: Icon("mark", 14, tone === "success" ? "text" : tone), expanded: notchState === "expanded" ? notchExpanded(buckets) : undefined, activity };
 }
-const widgetRing = (b, size) => h("Chart", {
-  type: "pie", width: size, height: size, innerRadius: 0.74,
-  data: [{ value: Math.max(clampPct(b.leftPct), 0.001), color: widgetTone(b.leftPct) }, { value: Math.max(100 - clampPct(b.leftPct), 0.001), color: "#8080803d" }],
-});
-const widgetBar = b => h("Column", { gap: 4 },
-  h("Row", { gap: 6, alignItems: "center" }, TX(b.title, { fontSize: 12, fontWeight: 500, maxLines: 1 }), h("Spacer"), TX(formatCountdown(b.resetMs), { fontSize: 11, color: "secondary", maxLines: 1 }), TX(pctText(b.leftPct), { fontSize: 12, fontWeight: 600, color: widgetTone(b.leftPct), maxLines: 1 })),
-  h("Progress", { value: Math.max(0, Math.min(1, b.leftPct / 100)), color: widgetTone(b.leftPct) }));
+const widgetRing = (b, size) => h("Chart", { type: "pie", width: size, height: size, innerRadius: 0.74, data: [{ value: Math.max(clampPct(b.leftPct), 0.001), color: widgetTone(b.leftPct) }, { value: Math.max(100 - clampPct(b.leftPct), 0.001), color: "#8080803d" }] });
+const widgetBar = b => h("Column", { gap: 4 }, h("Row", { gap: 6, alignItems: "center" }, TX(b.title, { fontSize: 12, fontWeight: 500, maxLines: 1 }), h("Spacer"), TX(formatCountdown(b.resetMs), { fontSize: 11, color: "secondary", maxLines: 1 }), TX(pctText(b.leftPct), { fontSize: 12, fontWeight: 600, color: widgetTone(b.leftPct), maxLines: 1 })), h("Progress", { value: Math.max(0, Math.min(1, b.leftPct / 100)), color: widgetTone(b.leftPct) }));
 function widgetTree(family) {
   const heading = h("Row", { gap: 6, alignItems: "center" }, h("Icon", { svg: BRAND, size: 14, color: "accent" }), TX(TITLE, { fontSize: 13, fontWeight: 600, maxLines: 1 }), h("Spacer"), family !== "small" && snapshot && snapshot.plan ? h("Badge", { text: snapshot.plan }) : null);
   if (!snapshot) return h("Column", { gap: 6 }, heading, h("Spacer"), TX(error ? T.failed : T.loading, { fontSize: 12, color: "secondary", textAlign: "center" }), error ? TX(T.reconnect, { fontSize: 11, color: "secondary", textAlign: "center", maxLines: 2 }) : null, h("Spacer"));
@@ -783,15 +773,20 @@ function widgetTree(family) {
 
 // -- 生命周期导出 --
 export default {
-  async scheduled(env) { inputs = (env && env.inputs) || inputs; await refresh(); },
+  async scheduled(env) {
+    inputs = (env && env.inputs) || inputs;
+    const manual = Boolean(env && (env.reason === "manual" || env.reason === "inputs-changed"));
+    if (env && env.reason === "inputs-changed") { cachedAuth = null; keychainTried = false; }
+    await refresh(manual);
+  },
   render(env) {
     inputs = (env && env.inputs) || inputs;
     if (activity && activity.expiresAt <= Date.now()) activity = undefined;
     return { tray: trayTree(), panel: panelTree(env), notch: notchTree(), widget: { small: widgetTree("small"), medium: widgetTree("medium"), large: widgetTree("large") } };
   },
   event(name, payload) {
-    if (name === "refresh") return launchRefresh();
-    if (name === "lifecycle" && payload && payload.type === "expand" && !inflight && (!snapshot || Date.now() - snapshot.fetchedAt > 60e3)) launchRefresh();
+    if (name === "refresh") return launchRefresh(true);
+    if (name === "lifecycle" && payload && payload.type === "expand" && !inflight && (!snapshot || Date.now() - snapshot.fetchedAt > EXPAND_STALE_MS)) launchRefresh(false);
   },
 };
   ]]></script>

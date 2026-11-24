@@ -36,6 +36,7 @@ function setup(options = {}) {
   const requests = [];
   const copied = [];
   const toasts = [];
+  const stats = { keychainCalls: 0, secretCalls: 0, fileCalls: 0 };
   const storage = new Map();
   const secrets = { ...(options.secrets || {}) };
   const authContent =
@@ -80,14 +81,25 @@ function setup(options = {}) {
     },
     $metrix: {
       platform: 'darwin',
-      secret: name => secrets[name] || '',
+      secret: name => {
+        stats.secretCalls++;
+        return options.asyncSecret ? Promise.resolve(secrets[name] || '') : (secrets[name] || '');
+      },
       readFile: async p => {
-        if (options.readFails) throw new Error('ENOENT');
+        stats.fileCalls++;
+        if (options.localFiles && Object.prototype.hasOwnProperty.call(options.localFiles, p)) {
+          const val = options.localFiles[p];
+          if (val instanceof Error) throw val;
+          return val;
+        }
+        if (options.readFails) throw options.readError || new Error('ENOENT');
         return typeof authContent === 'function' ? authContent(p) : authContent;
       },
       readCredential: async (service, account) => {
+        stats.keychainCalls++;
+        if (options.keychainError) throw options.keychainError;
         if (options.keychainValue && service === 'gemini' && account === 'antigravity') return options.keychainValue;
-        throw new Error('not found');
+        throw new Error('item could not be found');
       },
       caniuse: async () => false,
       outputs: () => ({ tray: true, panel: true, notch: options.notchState || 'compact', widget: { known: true, families: ['small', 'medium', 'large'] } }),
@@ -166,7 +178,9 @@ function setup(options = {}) {
     requests,
     copied,
     toasts,
-    run: () => context.dashboard.scheduled(env),
+    stats,
+    run: (reason = 'interval') => context.dashboard.scheduled({ ...env, reason }),
+    event: (name, payload) => context.dashboard.event(name, payload),
     render: () => context.dashboard.render(env),
     call: expr => vm.runInContext(expr, context),
   };
@@ -369,7 +383,136 @@ function flatten(node, out = []) {
   assert.equal(chunkedParsed.complete, true);
   assert.deepEqual(JSON.parse(chunkedParsed.text), { ok: true, note: '测试完成' });
 
-  console.log('PASS: agy Keychain go-keyring-base64, HTTP/1.1 chunked TLS parser, daily endpoint, quota filtering, grouping, grid view, summary fallback, 401 refresh, cc-switch multi-account, notch & widgets');
+  // 11. ~/.gemini silent file priority (freshest token, 0 Keychain calls), cachedAuth memory reuse,
+  //     24h metadata cache -> 1 single retrieveUserQuotaSummary request on routine polls, and 5m expand cooldown
+  const rawXml = fs.readFileSync(path.join(__dirname, 'antigravity.bar'), 'utf8');
+  assert(rawXml.includes('refresh="15m"'), 'default refresh interval must be 15m');
+  assert(rawXml.includes('~/.gemini/jetski-standalone-oauth-token'), 'must declare jetski oauth file permission');
+  assert(rawXml.includes('~/.gemini/antigravity-cli/antigravity-oauth-token'), 'must declare agy cli oauth file permission');
+
+  const olderFile = JSON.stringify({
+    token: { access_token: 'older-tok', expiry: new Date(Date.now() + 1800e3).toISOString() },
+    id_token_email: 'older@example.invalid',
+  });
+  const newerFile = JSON.stringify({
+    token: { access_token: 'newer-tok', expiry: new Date(Date.now() + 3600e3).toISOString() },
+    id_token_email: 'newer@example.invalid',
+  });
+  const quiet = setup({
+    inputs: { authFile: '' },
+    readFails: true,
+    localFiles: {
+      '~/.gemini/antigravity-cli/antigravity-oauth-token': olderFile,
+      '~/.gemini/jetski-standalone-oauth-token': newerFile,
+    },
+  });
+  await quiet.run('initial');
+  assert.equal(quiet.stats.keychainCalls, 0, 'must never touch Keychain when ~/.gemini token files exist');
+  assert.equal(quiet.call('snapshot.accountLabel'), 'newer@example.invalid', 'must pick fresher ~/.gemini token');
+  const firstFiles = quiet.stats.fileCalls;
+  const firstSecrets = quiet.stats.secretCalls;
+  quiet.requests.length = 0;
+
+  // Routine poll #2 & #3: reuse cachedAuth in memory (0 file/secret/keychain reads) and send ONLY 1 request!
+  await quiet.run('interval');
+  await quiet.run('interval');
+  assert.equal(quiet.stats.keychainCalls, 0);
+  assert.equal(quiet.stats.fileCalls, firstFiles, 'cachedAuth must prevent repeated file reads while token is valid');
+  assert.equal(quiet.stats.secretCalls, firstSecrets, 'cachedAuth must prevent repeated secret() calls while token is valid');
+  assert.deepEqual(
+    quiet.requests.map(r => r.url),
+    [
+      'https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
+      'https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary',
+    ],
+    'routine grouped polls must send only 1 retrieveUserQuotaSummary request'
+  );
+
+  // Lifecycle expand: < 5m must NOT refresh; > 5m MUST refresh
+  quiet.requests.length = 0;
+  quiet.call('snapshot.fetchedAt = Date.now() - 120000');
+  quiet.event('lifecycle', { type: 'expand' });
+  await new Promise(r => setTimeout(r, 15));
+  assert.equal(quiet.requests.length, 0, 'expand within 5m must not trigger upstream requests');
+  quiet.call('snapshot.fetchedAt = Date.now() - 305000');
+  quiet.event('lifecycle', { type: 'expand' });
+  await new Promise(r => setTimeout(r, 15));
+  assert.equal(quiet.requests.length, 1, 'expand after 5m triggers 1 summary refresh');
+
+  // Sticky origin: transient network error on cached daily origin must NOT dual-hammer prod
+  quiet.requests.length = 0;
+  quiet.context.fetch = async url => {
+    quiet.requests.push({ url });
+    throw new Error('socket hang up');
+  };
+  await quiet.run('interval');
+  assert.deepEqual(quiet.requests.map(r => r.url), ['https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary']);
+
+  // 12. Async $metrix.secret(Promise) compatibility + cachedAuth reuse
+  const asyncSec = setup({
+    inputs: { authFile: '' },
+    readFails: true,
+    asyncSecret: true,
+    secrets: {
+      credentialsJSON: JSON.stringify({
+        email: 'async-sec@example.invalid',
+        access_token: 'async-sec-tok',
+        expires_at: Date.now() + 3600e3,
+      }),
+    },
+  });
+  await asyncSec.run('initial');
+  assert.equal(asyncSec.call('snapshot.accountLabel'), 'async-sec@example.invalid');
+  const secCount = asyncSec.stats.secretCalls;
+  await asyncSec.run('interval');
+  assert.equal(asyncSec.stats.secretCalls, secCount);
+
+  // 13. Precise error diagnostics & Keychain anti-popup guard on background intervals
+  const kcDenied = setup({
+    inputs: { authFile: '' },
+    readFails: true,
+    keychainError: new Error('User canceled / Permission denied (-128)'),
+  });
+  await kcDenied.run('initial');
+  assert(kcDenied.render().tray.error.includes('系统钥匙串拒绝访问'));
+  assert.equal(kcDenied.stats.keychainCalls, 1);
+  await kcDenied.run('interval');
+  assert.equal(kcDenied.stats.keychainCalls, 1, 'background interval must NOT re-prompt Keychain after failure');
+  await kcDenied.run('manual');
+  assert.equal(kcDenied.stats.keychainCalls, 2, 'manual refresh is allowed to retry Keychain');
+
+  const kcMissing = setup({
+    inputs: { authFile: '' },
+    readFails: true,
+    keychainError: new Error('The specified item could not be found in the keychain (-25300)'),
+  });
+  await kcMissing.run('initial');
+  assert(kcMissing.render().tray.error.includes('未找到 agy 登录记录'));
+
+  const filePerm = setup({
+    inputs: { authFile: '~/custom/blocked.json' },
+    readFails: true,
+    readError: new Error('EACCES: permission denied'),
+    keychainError: new Error('item could not be found'),
+  });
+  await filePerm.run('initial');
+  assert(filePerm.render().tray.error.includes('无法读取指定的认证文件'));
+
+  const expiredLocal = setup({
+    inputs: { authFile: '' },
+    readFails: true,
+    localFiles: {
+      '~/.gemini/jetski-standalone-oauth-token': JSON.stringify({
+        token: { access_token: 'expired-tok', refresh_token: 'rt-no-secret', expiry: new Date(Date.now() - 60e3).toISOString() },
+        id_token_email: 'exp@example.invalid',
+      }),
+    },
+  });
+  await expiredLocal.run('interval');
+  assert(expiredLocal.render().tray.error.includes('登录令牌已过期'));
+  assert.equal(expiredLocal.requests.length, 0, 'known-expired token without client_secret must not send doomed /v1internal requests');
+
+  console.log('PASS: v1.3.0 ~/.gemini silent auth, cachedAuth anti-popup, async secret, precise diagnostics, 1-request polling, 24h meta cache, sticky origin, 5H+WEEKLY & newest-first grid');
 })().catch(err => {
   console.error(err);
   process.exitCode = 1;
