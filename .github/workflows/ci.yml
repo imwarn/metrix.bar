@@ -1,0 +1,25 @@
+# [INPUT]: 依赖仓库根目录下 test-utils/run-all.cjs 与 dashboards/*/*.test.cjs
+# [OUTPUT]: 在 push(main) 与 pull_request 时运行全部离线契约测试
+# [POS]: .github/workflows 下的持续集成入口，与本地 node test-utils/run-all.cjs 共用同一测试驱动
+# [PROTOCOL]: Update this header on change, then check GEMINI.md
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  contract-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node test-utils/run-all.cjs

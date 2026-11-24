@@ -9,17 +9,21 @@
 ├── dashboards/                # 自定义看板集合，每个看板独占一个子目录
 │   ├── antigravity/           # Antigravity 模型配额与重置倒计时看板
 │   │   ├── antigravity.bar    # Metrix.Bar Protocol v0 看板源码（含富托盘 / Notch / Widget / SQLite）
-│   │   └── antigravity.test.cjs # Node.js 离线契约测试（21 项离线契约检查）
+│   │   └── antigravity.test.cjs # Node.js 离线契约测试（22 项离线契约检查）
 │   └── beszel/                # Beszel 主机与容器监控看板
 │       ├── beszel.bar         # Metrix.Bar Protocol v0 看板源码
 │       ├── beszel.test.cjs    # Node.js 离线契约测试
 │       └── references/        # 上游 Beszel 0.21.1 接口与类型参考
 ├── designs/                   # 看板交互式 HTML/JSX 界面原型与视觉方案探索
 │   └── antigravity-ui/        # Antigravity 主面板 3 套变体与全表面交互评审原型
-├── test-utils/                # 仓库内所有看板离线测试共享的零依赖契约断言库
-│   └── metrixbar-assert.cjs
+├── test-utils/                # 仓库内所有看板离线测试共享的零依赖契约断言库与统一运行器
+│   ├── metrixbar-assert.cjs   # Metrix.Bar Protocol v0 契约断言库
+│   └── run-all.cjs            # 自动发现并执行全部 dashboards/*/*.test.cjs 的统一运行器
 ├── types/                     # 仓库内所有看板共享的 Metrix.Bar 运行时类型定义
 │   └── metrixbar-runtime.d.ts
+├── .github/                   # GitHub Actions 持续集成工作流
+│   └── workflows/
+│       └── ci.yml             # push(main) / PR 自动执行全量离线契约测试
 ├── .agents/                   # 已安装的 metrix-bar Agent Skill
 └── skills-lock.json           # Skill 来源与校验锁定清单
 ```
@@ -33,9 +37,13 @@
 
 ## 本地测试
 
-所有契约测试仅依赖 Node.js 内置模块（`node:vm`、`node:assert`），可在仓库根目录直接运行：
+所有契约测试仅依赖 Node.js 内置模块（`node:vm`、`node:assert`），可在仓库根目录一键执行全部看板测试，或按看板单独运行：
 
 ```bash
+# 运行全部看板离线契约测试（自动发现 dashboards/*/*.test.cjs，与 CI 一致）
+node test-utils/run-all.cjs
+
+# 或单独运行某个看板测试
 node dashboards/antigravity/antigravity.test.cjs
 node dashboards/beszel/beszel.test.cjs
 ```
@@ -54,6 +62,7 @@ node dashboards/beszel/beszel.test.cjs
 
 ## 新增看板约定
 
-- 在 `dashboards/<id>/` 下创建 `<id>.bar` 与配套 `<id>.test.cjs`。
+- 在 `dashboards/<id>/` 下创建 `<id>.bar` 与配套 `<id>.test.cjs`（[`test-utils/run-all.cjs`](test-utils/run-all.cjs) 与 GitHub Actions CI 会自动扫描纳入）。
+- 在 `<id>.test.cjs` 中复用 [`test-utils/metrixbar-assert.cjs`](test-utils/metrixbar-assert.cjs) 校验 Panel / Notch / Widget / TrayContent 协议子集。
 - 将接口/类型参考按需归档至 `dashboards/<id>/references/`，避免提交大型仓库树或临时抓包文件。
 - 复用根目录 [`types/metrixbar-runtime.d.ts`](types/metrixbar-runtime.d.ts) 对照宿主运行时接口。
