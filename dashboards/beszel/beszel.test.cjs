@@ -1,14 +1,14 @@
 /**
- * [INPUT]: 依赖 node:fs、node:path、node:vm、node:assert/strict 及同目录 beszel.bar
+ * [INPUT]: depends on ../../test-utils/metrixbar-assert.cjs, node:path, node:vm, node:assert/strict, and sibling beszel.bar
  * [OUTPUT]: 无导出，直接执行 Beszel 看板离线契约测试并以进程退出码反馈结果
- * [POS]: dashboards/beszel 的离线回归验证入口，可从仓库根目录或本目录直接运行
+ * [POS]: dashboards/beszel 的离线回归验证入口，复用共享契约断言库校验多表面渲染、密码隔离与会话契约，可从仓库根目录或本目录直接运行
  * [PROTOCOL]: Update this header on change, then check GEMINI.md
  */
-const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
-const source = fs.readFileSync(path.join(__dirname, 'beszel.bar'), 'utf8').match(/<script[^>]*><!\[CDATA\[([\s\S]*?)\]\]><\/script>/)[1];
+const { extractBarScript, flatten, validateViewContract } = require('../../test-utils/metrixbar-assert.cjs');
+const { script: source } = extractBarScript(path.join(__dirname, 'beszel.bar'));
 const hub = 'http://100.64.0.1:8090';
 const now = Date.now();
 const system = {id:'fixturehost001',name:'NAS',host:'100.64.0.10',status:'up',updated:new Date(now).toISOString(),info:{cpu:21,mp:45,dp:61,bb:4096,u:90000}};
@@ -31,9 +31,9 @@ function setup(options = {}) {
   return {context,env,requests,stored,render:()=>context.dashboard.render(env),run:()=>context.dashboard.scheduled(env),
     call:expression=>vm.runInContext(expression,context),secret:()=>secret};
 }
-function flatten(n,out=[]) {if(n&&typeof n==='object'){out.push(n);for(const c of n.children||[])flatten(c,out);}return out;}
 (async()=>{
   const state = setup(); await state.run();
+  validateViewContract(state.render(), { forbidSecrets: ['fixture-session'] });
   assert.equal(state.render().tray.title,'1/1 · 4.00 KB/s');
   assert.equal(state.call('network({ns:1,nr:2}).up'),1048576);
   assert.equal(state.call('network({b:[10,20],ns:1}).up'),10);
@@ -52,6 +52,7 @@ function flatten(n,out=[]) {if(n&&typeof n==='object'){out.push(n);for(const c o
   const login = setup({secret:''}); login.render();
   const fields=flatten(login.render().panel).filter(n=>n.type==='TextInput');
   fields[0].props.onChange('fixture@example.invalid');fields[1].props.onChange('synthetic-password');
+  validateViewContract(login.render(), { forbidSecrets: ['synthetic-password'] });
   assert(!JSON.stringify(login.render()).includes('synthetic-password'));
   await login.call('login()');
   assert.equal(login.stored.length,1);

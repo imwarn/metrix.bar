@@ -1,17 +1,23 @@
 /**
- * [INPUT]: 依赖 node:fs、node:path、node:vm、node:assert/strict 及同目录 antigravity.bar
- * [OUTPUT]: 无导出，直接执行 Antigravity v1.4.0 看板离线契约测试并以进程退出码反馈结果
- * [POS]: dashboards/antigravity 的离线回归验证入口（21 项离线契约检查），覆盖凭据/轮询契约、双环/PaceBar/A2 胶囊/SQLite 趋势、严格 Widget 子集、richTray 原生双行富托盘（TrayContentRoot）及自定义低额度阈值/预测提前耗尽刘海预警
+ * [INPUT]: depends on ../../test-utils/metrixbar-assert.cjs, node:path, node:vm, node:assert/strict, and sibling antigravity.bar
+ * [OUTPUT]: 无导出，直接执行 Antigravity v1.4.1 看板离线契约测试并以进程退出码反馈结果
+ * [POS]: dashboards/antigravity 的离线回归验证入口（22 项离线契约检查），复用共享契约断言库覆盖凭据/轮询、双环/PaceBar/A2 胶囊/SQLite 趋势、Weekly 短时突发预测平滑、多表面契约、严格 Widget 子集、richTray 原生双行富托盘及自定义低额度阈值/预测提前耗尽刘海预警
  * [PROTOCOL]: Update this header on change, then check GEMINI.md
  */
-const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const assert = require('node:assert/strict');
+const {
+  extractBarScript,
+  flatten,
+  textOf,
+  validatePanelTree,
+  validateWidgetTree,
+  validateTrayContent,
+  validateViewContract,
+} = require('../../test-utils/metrixbar-assert.cjs');
 
-const source = fs
-  .readFileSync(path.join(__dirname, 'antigravity.bar'), 'utf8')
-  .match(/<script[^>]*><!\[CDATA\[([\s\S]*?)\]\]><\/script>/)[1];
+const { rawXml, script: source } = extractBarScript(path.join(__dirname, 'antigravity.bar'));
 
 const futureIso = new Date(Date.now() + (6 * 86400 + 4 * 3600 + 300) * 1000).toISOString();
 const shortIso = new Date(Date.now() + (3 * 3600 + 1200) * 1000).toISOString();
@@ -229,98 +235,16 @@ function setup(options = {}) {
   };
 }
 
-function flatten(node, out = []) {
-  if (node && typeof node === 'object') {
-    out.push(node);
-    for (const c of node.children || []) flatten(c, out);
-  }
-  return out;
-}
-
-const WIDGET_BASE = ['key', 'padding'];
-const WIDGET_LAYOUT = [...WIDGET_BASE, 'gap', 'width', 'height', 'radius', 'background', 'alignItems'];
-const WIDGET_TEXT_STYLE = [...WIDGET_BASE, 'color', 'textColor', 'bold', 'italic', 'fontSize', 'fontWeight'];
-const WIDGET_ALLOWED_PROPS = {
-  Column: new Set(WIDGET_LAYOUT),
-  Row: new Set(WIDGET_LAYOUT),
-  Box: new Set(WIDGET_LAYOUT),
-  Grid: new Set([...WIDGET_LAYOUT, 'columns']),
-  Text: new Set([...WIDGET_TEXT_STYLE, 'text', 'maxLines', 'textAlign']),
-  RichText: new Set([...WIDGET_TEXT_STYLE, 'spans', 'maxLines', 'textAlign']),
-  Badge: new Set([...WIDGET_TEXT_STYLE, 'text', 'background']),
-  Avatar: new Set([...WIDGET_BASE, 'name', 'src', 'size', 'color', 'textColor', 'background']),
-  Icon: new Set([...WIDGET_BASE, 'svg', 'size', 'color', 'textColor']),
-  Image: new Set([...WIDGET_BASE, 'src', 'width', 'height', 'radius']),
-  Progress: new Set([...WIDGET_BASE, 'value', 'color', 'textColor']),
-  Meter: new Set([...WIDGET_BASE, 'value', 'min', 'max', 'levels', 'color', 'textColor']),
-  Chart: new Set([...WIDGET_BASE, 'type', 'width', 'height', 'series', 'data', 'innerRadius', 'yDomain', 'strokeWidth']),
-  Spacer: new Set(['key']),
-  Divider: new Set(['key', 'orientation']),
-};
-const WIDGET_FORBIDDEN_PROPS = new Set([
-  'absolute', 'fillWidth', 'grow', 'shrink', 'minWidth', 'singleLine', 'fontFeatures',
-  'wrap', 'hover', 'xKind', 'legend', 'appear', 'tooltip', 'onClick',
-]);
-const WIDGET_COLORS = new Set(['primary', 'secondary', 'accent', 'success', 'warning', 'error']);
-const isValidWidgetColor = c => typeof c === 'string' && (WIDGET_COLORS.has(c) || /^#[0-9a-fA-F]{3,8}$/.test(c));
-
-function validateWidgetTree(node, trace = 'widget') {
-  if (node == null || typeof node === 'string' || typeof node === 'number' || typeof node === 'boolean') return;
-  assert.equal(typeof node, 'object', `${trace} must be an object or primitive`);
-  if (!('type' in node) && typeof node.text === 'string') return;
-  const allowed = WIDGET_ALLOWED_PROPS[node.type];
-  assert(allowed, `${trace}: forbidden WidgetComponentType "${node.type}"`);
-  const props = node.props || {};
-  for (const [k, v] of Object.entries(props)) {
-    if (v === undefined) continue;
-    assert(!WIDGET_FORBIDDEN_PROPS.has(k), `${trace}.${node.type}: forbidden panel-only prop "${k}"`);
-    assert(allowed.has(k), `${trace}.${node.type}: disallowed Widget prop "${k}"`);
-    if (k === 'color' || k === 'textColor' || k === 'background') {
-      assert(isValidWidgetColor(v), `${trace}.${node.type}.${k}: invalid WidgetColor "${v}"`);
-    }
-  }
-  if (node.type === 'Chart') {
-    if (props.type !== undefined) assert(['line', 'area', 'bar', 'pie'].includes(props.type), `${trace}.Chart: invalid type "${props.type}"`);
-    for (const d of props.data || []) if (d.color !== undefined) assert(isValidWidgetColor(d.color), `${trace}.Chart.data: invalid color "${d.color}"`);
-    for (const s of props.series || []) if (s.color !== undefined) assert(isValidWidgetColor(s.color), `${trace}.Chart.series: invalid color "${s.color}"`);
-  }
-  for (let i = 0; i < (node.children || []).length; i++) {
-    validateWidgetTree(node.children[i], `${trace}.${node.type}[${i}]`);
-  }
-}
-
-const TRAY_LAYOUT = ['width', 'height', 'gap', 'padding', 'paddingX', 'paddingY', 'alignItems', 'justify'];
-const TRAY_ALLOWED = {
-  Row: new Set(TRAY_LAYOUT), Column: new Set(TRAY_LAYOUT), Spacer: new Set(TRAY_LAYOUT),
-  Text: new Set([...TRAY_LAYOUT, 'text', 'fontSize', 'fontWeight']),
-  Icon: new Set([...TRAY_LAYOUT, 'svg', 'fontSize']),
-  Chart: new Set([...TRAY_LAYOUT, 'type', 'series', 'strokeWidth']),
-};
-function validateTrayContent(node, trace = 'tray.content', isRoot = true) {
-  assert(node && typeof node === 'object', `${trace} must be an object`);
-  const allowed = TRAY_ALLOWED[node.type], props = node.props || {};
-  assert(allowed, `${trace}: disallowed TrayContentNode type "${node.type}"`);
-  if (isRoot) { assert.equal(props.height, 22); assert(Number.isInteger(props.width) && props.width >= 16 && props.width <= 240); }
-  for (const [k, v] of Object.entries(props)) {
-    if (v === undefined) continue;
-    assert(allowed.has(k), `${trace}.${node.type}: disallowed Tray prop "${k}"`);
-    if (k === 'fontWeight') assert(Number.isInteger(v) && v >= 100 && v <= 900 && v % 100 === 0, `${trace}: bad fontWeight ${v}`);
-    if (k === 'alignItems') assert(['start', 'center', 'end', 'stretch'].includes(v), `${trace}: bad alignItems ${v}`);
-    if (k === 'justify') assert(['start', 'center', 'end', 'space-between', 'space-around', 'space-evenly'].includes(v), `${trace}: bad justify ${v}`);
-  }
-  if (node.type === 'Icon') assert(typeof props.svg === 'string' && props.svg.includes('<svg'), `${trace}.Icon requires svg`);
-  for (let i = 0; i < (node.children || []).length; i++) {
-    const ch = node.children[i];
-    if (node.type === 'Text') assert(typeof ch === 'string' || typeof ch === 'number', `${trace}.Text child must be string|number`);
-    else validateTrayContent(ch, `${trace}.${node.type}[${i}]`, false);
-  }
-}
-
 (async () => {
   // 1. Overview, dual 5H + WEEKLY grouped buckets, deduplicated preview, and privacy
   const s = setup({ notchState: 'expanded' });
   await s.run();
   const view = s.render();
+  validateViewContract(view, {
+    requireWidget: true,
+    requireNotch: true,
+    forbidSecrets: ['synthetic-access-token', 'synthetic-refresh-token'],
+  });
   assert.equal(view.tray.title, '42%');
   assert.equal(view.tray.error, '');
   assert.equal(s.call('snapshot.models.length'), 6);
@@ -352,14 +276,16 @@ function validateTrayContent(node, trace = 'tray.content', isRoot = true) {
     keychainValue: 'go-keyring-base64:' + Buffer.from(agyPayload, 'utf8').toString('base64'),
   });
   await kc.run();
-  assert.equal(kc.render().tray.title, '42%');
+  const kcView = kc.render();
+  validateViewContract(kcView, { requireWidget: true, requireNotch: true, forbidSecrets: ['kc-access-token', 'kc-refresh'] });
+  assert.equal(kcView.tray.title, '42%');
   assert.equal(kc.call('snapshot.accountLabel'), 'agy@example.invalid');
-  assert(!JSON.stringify(kc.render()).includes('kc-access-token'));
 
   // 3. Grid view puts newest models first (agentModelSorts -> semantic version -> utility last), click copies ID, search filters
   const seg = flatten(view.panel).find(n => n.type === 'Segmented');
   seg.props.onChange('grid');
   const gridView = s.render();
+  validatePanelTree(gridView.panel, 'grid.panel');
   const cards = flatten(gridView.panel).filter(n => n.props && String(n.props.key || '').startsWith('card-'));
   assert.equal(cards.length, 6);
   assert.deepEqual(cards.map(c => c.props.key), [
@@ -507,7 +433,6 @@ function validateTrayContent(node, trace = 'tray.content', isRoot = true) {
 
   // 11. ~/.gemini silent file priority (freshest token, 0 Keychain calls), cachedAuth memory reuse,
   //     24h metadata cache -> 1 single retrieveUserQuotaSummary request on routine polls, and 5m expand cooldown
-  const rawXml = fs.readFileSync(path.join(__dirname, 'antigravity.bar'), 'utf8');
   assert(rawXml.includes('refresh="15m"'), 'default refresh interval must be 15m');
   assert(rawXml.includes('~/.gemini/jetski-standalone-oauth-token'), 'must declare jetski oauth file permission');
   assert(rawXml.includes('~/.gemini/antigravity-cli/antigravity-oauth-token'), 'must declare agy cli oauth file permission');
@@ -634,8 +559,8 @@ function validateTrayContent(node, trace = 'tray.content', isRoot = true) {
   assert(expiredLocal.render().tray.error.includes('登录令牌已过期'));
   assert.equal(expiredLocal.requests.length, 0, 'known-expired token without client_secret must not send doomed /v1internal requests');
 
-  // 14. v1.4.0 layout contract: preferredWidth 420, HeroDualRings replaces old 3-tile SummaryStrip
-  assert(rawXml.includes('version="1.4.0"'), 'bar XML must declare version 1.4.0');
+  // 14. v1.4.1 layout contract: preferredWidth 420, HeroDualRings replaces old 3-tile SummaryStrip
+  assert(rawXml.includes('version="1.4.1"'), 'bar XML must declare version 1.4.1');
   const v14 = setup({ notchState: 'expanded' });
   await v14.run('initial');
   const v14View = v14.render();
@@ -692,15 +617,15 @@ function validateTrayContent(node, trace = 'tray.content', isRoot = true) {
   geminiToggle.props.onClick();
   claudeToggle.props.onClick();
   const v14Expanded = v14.render();
+  validatePanelTree(v14Expanded.panel, 'expanded.panel');
   const argonChip = flatten(v14Expanded.panel).find(n => n.props && n.props.key === 'chip-gemini-4-argon-high');
   const carbonChip = flatten(v14Expanded.panel).find(n => n.props && n.props.key === 'chip-gemini-4-carbon-high');
   const opusChip = flatten(v14Expanded.panel).find(n => n.props && n.props.key === 'chip-claude-opus-5-5-high');
   assert(argonChip && carbonChip && opusChip, 'expanded drawers must render model chips');
-  const chipText = chip => flatten(chip).filter(n => n.type === 'Text').flatMap(n => n.children || []).join('');
-  assert.equal(chipText(argonChip), 'Argon High');
-  assert.equal(chipText(carbonChip), 'Carbon High');
-  assert.equal(chipText(opusChip), 'Opus 5.5 High');
-  assert(!chipText(argonChip).includes('gemini-4-argon-high'), 'chip text must be concise human label, not raw ID');
+  assert.equal(textOf(argonChip), 'Argon High');
+  assert.equal(textOf(carbonChip), 'Carbon High');
+  assert.equal(textOf(opusChip), 'Opus 5.5 High');
+  assert(!textOf(argonChip).includes('gemini-4-argon-high'), 'chip text must be concise human label, not raw ID');
   assert(argonChip.props.tooltip.includes('gemini-4-argon-high'), 'chip tooltip must include full model ID');
   argonChip.props.onClick();
   await new Promise(r => setTimeout(r, 10));
@@ -735,20 +660,25 @@ function validateTrayContent(node, trace = 'tray.content', isRoot = true) {
   assert(dbBar && dbBar.props.series[0].points.length === 2, 'PastCyclesChart must render bar chart for past cycles');
   assert.deepEqual(dbBar.props.series[0].points.map(p => p.y), [35, 12]);
 
-  // 19. Strict Widget Subset Validator across loaded, SQLite, loading, error, and Windows states
+  // 19. Multi-surface validateViewContract & Strict Widget Subset across loaded, SQLite, loading, error, and Windows states
   const loadingState = setup();
   const winState = setup({ platform: 'windows' });
   await winState.run('initial');
-  for (const [label, widgetObj] of [
-    ['loaded-darwin', v14View.widget],
-    ['loaded-sqlite', dbView.widget],
-    ['loading', loadingState.render().widget],
-    ['error', kcMissing.render().widget],
-    ['loaded-windows', winState.render().widget],
+  for (const [label, stateView] of [
+    ['loaded-darwin', v14View],
+    ['loaded-sqlite', dbView],
+    ['loading', loadingState.render()],
+    ['error', kcMissing.render()],
+    ['loaded-windows', winState.render()],
   ]) {
+    validateViewContract(stateView, {
+      requireWidget: true,
+      requireNotch: true,
+      forbidSecrets: ['synthetic-access-token', 'synthetic-refresh-token'],
+    });
     for (const family of ['small', 'medium', 'large']) {
-      assert(widgetObj && widgetObj[family], `${label}.widget.${family} must exist`);
-      validateWidgetTree(widgetObj[family], `${label}.${family}`);
+      assert(stateView.widget && stateView.widget[family], `${label}.widget.${family} must exist`);
+      validateWidgetTree(stateView.widget[family], `${label}.${family}`);
     }
   }
 
@@ -761,7 +691,13 @@ function validateTrayContent(node, trace = 'tray.content', isRoot = true) {
   await richOn.run('initial');
   const richView = richOn.render();
   assert.equal(richView.tray.title, '42%', 'fallback tray.title must remain 42%');
-  validateTrayContent(richView.tray.content, 'richTray.withIcon');
+  validateTrayContent(richView.tray.content, { allowIcon: true }, 'richTray.withIcon');
+  validateViewContract(richView, {
+    requireWidget: true,
+    requireNotch: true,
+    allowTrayIcon: true,
+    forbidSecrets: ['synthetic-access-token', 'synthetic-refresh-token'],
+  });
   const richNodes = flatten(richView.tray.content);
   assert(richNodes.some(n => n.type === 'Icon'), 'richTray with icon cap must include Icon');
   const richTexts = richNodes.filter(n => n.type === 'Text').map(n => n.props.text);
@@ -769,7 +705,13 @@ function validateTrayContent(node, trace = 'tray.content', isRoot = true) {
   const richNoIcon = setup({ inputs: { richTray: true }, caniuse: { 'render.tray.content': true, 'render.tray.content.icon': false } });
   await richNoIcon.run('initial');
   const richNoIconView = richNoIcon.render();
-  validateTrayContent(richNoIconView.tray.content, 'richTray.noIcon');
+  validateTrayContent(richNoIconView.tray.content, { allowIcon: false }, 'richTray.noIcon');
+  validateViewContract(richNoIconView, {
+    requireWidget: true,
+    requireNotch: true,
+    allowTrayIcon: false,
+    forbidSecrets: ['synthetic-access-token', 'synthetic-refresh-token'],
+  });
   assert(!flatten(richNoIconView.tray.content).some(n => n.type === 'Icon'), 'richTray without icon cap must omit Icon');
 
   // 21. Configurable lowQuotaThreshold & notchForecastAlert pace run-out warning
@@ -788,7 +730,58 @@ function validateTrayContent(node, trace = 'tray.content', isRoot = true) {
   await paceOff.run('initial');
   assert.equal(paceOff.render().notch.activity, undefined, 'notchForecastAlert=false must keep notch.activity undefined when 55% > 20%');
 
-  console.log('PASS: v1.4.0 full contract suite (21 checks: silent auth, 1-req polling, 420px HeroDualRings, PaceBar, A2 chips, SQLite trend/past, strict Widget subset, richTray, threshold/pace notch alerts)');
+  // 22. Weekly short-burst forecast smoothing (minAge = spanMs/28 = 6h on 7d WEEKLY)
+  const weekly6d12hMs = Date.now() + (6 * 24 + 12) * 3600e3;
+  const weekly6d12hIso = new Date(weekly6d12hMs).toISOString();
+  const weekly6d12hCycle = Math.round(Date.parse(weekly6d12hIso));
+  const weekly6d12hResp = async url => (url.endsWith(':retrieveUserQuotaSummary')
+    ? { groups: [{ displayName: 'Gemini Models', buckets: [{ bucketId: 'gemini-weekly', window: 'weekly', remainingFraction: 0.89, resetTime: weekly6d12hIso }] }] }
+    : url.endsWith(':fetchAvailableModels') ? { models: {} } : undefined);
+  const shortBurst = setup({
+    sqlite: true,
+    sqliteSeed: [{ acct: 'dev@example.invalid', bucket: 'bucket:gemini-weekly', cycle: weekly6d12hCycle, ts: Date.now() - 45 * 60e3, left_pct: 95 }],
+    respond: weekly6d12hResp,
+  });
+  await shortBurst.run('initial');
+  const burstFc = shortBurst.call('forecastBucket(snapshot.buckets[0])');
+  assert(burstFc.rate < 1.2 / 3600e3, '45m-old weekly sample (< 6h minAge) must be ignored in favor of 12h cycle-start baseline');
+  assert(!burstFc.runsOutMs || burstFc.runsOutMs - Date.now() > 3 * 86400e3, '45m burst on 6d 12h weekly bucket must not trigger false ~11h early run-out alarm');
+
+  const steepOn6d12h = setup({
+    sqlite: true,
+    sqliteSeed: [{ acct: 'dev@example.invalid', bucket: 'bucket:gemini-weekly', cycle: weekly6d12hCycle, ts: Date.now() - 10 * 3600e3, left_pct: 100 }],
+    respond: weekly6d12hResp,
+  });
+  await steepOn6d12h.run('initial');
+  const steep6d12hFc = steepOn6d12h.call('forecastBucket(snapshot.buckets[0])');
+  assert(steep6d12hFc.rate > 1.0 / 3600e3, '10h-old sample (>= 6h minAge) on 6d 12h weekly bucket must use recent 10h sample rate (~1.1%/h)');
+
+  const weekly6dMs = Date.now() + 6 * 86400e3;
+  const weekly6dIso = new Date(weekly6dMs).toISOString();
+  const weekly6dCycle = Math.round(Date.parse(weekly6dIso));
+  const weekly6dResp = async url => (url.endsWith(':retrieveUserQuotaSummary')
+    ? { groups: [{ displayName: 'Gemini Models', buckets: [{ bucketId: 'gemini-weekly', window: 'weekly', remainingFraction: 0.89, resetTime: weekly6dIso }] }] }
+    : url.endsWith(':fetchAvailableModels') ? { models: {} } : undefined);
+  const smoothWeekly = setup({
+    sqlite: true,
+    sqliteSeed: [{ acct: 'dev@example.invalid', bucket: 'bucket:gemini-weekly', cycle: weekly6dCycle, ts: Date.now() - 45 * 60e3, left_pct: 95 }],
+    respond: weekly6dResp,
+  });
+  await smoothWeekly.run('initial');
+  assert.equal(smoothWeekly.call('forecastBucket(snapshot.buckets[0]).runsOutMs'), null, '45m-old sample (< 6h minAge) on ahead-of-pace weekly bucket must keep runsOutMs null');
+  assert.equal(smoothWeekly.render().notch.activity, undefined, 'smoothed ahead-of-pace weekly bucket must not trigger false :pace: notch alert');
+
+  const steep10h = setup({
+    sqlite: true,
+    sqliteSeed: [{ acct: 'dev@example.invalid', bucket: 'bucket:gemini-weekly', cycle: weekly6dCycle, ts: Date.now() - 10 * 3600e3, left_pct: 99 }],
+    respond: weekly6dResp,
+  });
+  await steep10h.run('initial');
+  const steepFc = steep10h.call('forecastBucket(snapshot.buckets[0])');
+  assert(steepFc.runsOutMs && steepFc.runsOutMs < weekly6dMs, '10h-old sample (>= 6h minAge) showing steep burn must use recent sample rate and predict early run-out');
+  assert(steep10h.render().notch.activity && steep10h.render().notch.activity.id.includes(':pace:'), 'sustained 10h steep weekly burn must trigger :pace: notch activity');
+
+  console.log('PASS: v1.4.1 full contract suite (22 checks: shared test-utils contract, silent auth, 1-req polling, 420px HeroDualRings, PaceBar, A2 chips, SQLite trend/past, strict Widget subset, richTray, threshold/pace notch alerts, weekly short-burst smoothing)');
 })().catch(err => {
   console.error(err);
   process.exitCode = 1;

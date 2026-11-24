@@ -1,4 +1,4 @@
-<bar protocol-version="0" min-app-version="0.3.2" id="antigravity" title="Antigravity" version="1.4.0"
+<bar protocol-version="0" min-app-version="0.3.2" id="antigravity" title="Antigravity" version="1.4.1"
      category="ai" license="AGPL-3.0-only" homepage="https://github.com/imwarn/metrix.bar"
      description="Monitor Antigravity model quotas, reset countdowns, and local usage trends."
      refresh="15m" material="glass" placements="menubar" open-mode="flyout" window-style="standard"
@@ -38,7 +38,7 @@
 /**
  * [INPUT]: 依赖 Metrix.Bar 宿主 $metrix（readFile/readCredential/secret/sqlite/caniuse）、localStorage、cloudflare:sockets TLS 与 Cloud Code API
  * [OUTPUT]: 导出 Metrix.Bar Worker（scheduled/render/event），低频单请求查询配额并渲染 420px 双焦点圆环仪表、匀速刻度 PaceBar、趋势预测、精简模型胶囊、按需双行富托盘（tray.content）及可配置阈值/提前耗尽预警 Notch/Widget
- * [POS]: dashboards/antigravity 唯一看板源文件（v1.4.0），被 Metrix.Bar 直接加载并由 antigravity.test.cjs 做离线单测
+ * [POS]: dashboards/antigravity 唯一看板源文件（v1.4.1），被 Metrix.Bar 直接加载并由 antigravity.test.cjs 做离线单测
  * [PROTOCOL]: Update this header on change, then check GEMINI.md
  */
 // SPDX-License-Identifier: AGPL-3.0-only
@@ -55,7 +55,7 @@ const AGY_USER_AGENT = "Metrix.Bar/1.4 (antigravity/cli/1.5.15)";
 const GO_KEYRING_PREFIX = "go-keyring-base64:";
 const K = { muted: "textMuted", hover: "surfaceHover", press: "surfacePressed", track: "border" };
 const AUTH_MARGIN_MS = 120e3, EXPAND_STALE_MS = 300e3, META_TTL_MS = 24 * 3600e3, H5 = 5 * 3600e3, D7 = 7 * 864e5;
-const CYCLE_SLACK = 15 * 60e3, KEEP_MS = 35 * 864e5, LOW_QUOTA_THRESHOLD = 20, RING = 84;
+const CYCLE_SLACK = 15 * 60e3, KEEP_MS = 35 * 864e5, LOW_QUOTA_THRESHOLD = 20, RING = 76;
 
 // -- 图标与双语文案 --
 const svg = (body, fill = false) => `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" ${fill ? 'fill="currentColor"' : 'fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"'}>${body}</svg>`;
@@ -475,7 +475,7 @@ const bucketPace = (b, now = Date.now()) => { if (!trendable(b, now)) return nul
 function forecastBucket(b, now = Date.now()) {
   if (!trendable(b, now)) return { empty: Boolean(b && b.leftPct <= 0), rate: 0, runsOutMs: null, leftAtReset: b ? b.leftPct : 0 };
   if (b.leftPct <= 0) return { empty: true, rate: 0, runsOutMs: null, leftAtReset: 0 };
-  const start = b.resetMs - b.spanMs, since = now - Math.max(3600e3, b.spanMs / 7), base = bucketSamples(b).find(s => s.ts >= since && s.ts <= now - 30 * 60e3);
+  const start = b.resetMs - b.spanMs, since = now - Math.max(3600e3, b.spanMs / 7), minAge = Math.max(30 * 60e3, Math.round(b.spanMs / 28)), base = bucketSamples(b).find(s => s.ts >= since && s.ts <= now - minAge);
   const from = base || { ts: start, left_pct: 100 }, rate = now > from.ts ? Math.max(0, (from.left_pct - b.leftPct) / (now - from.ts)) : 0;
   return { empty: false, rate, runsOutMs: rate > 0 && now + b.leftPct / rate < b.resetMs ? now + b.leftPct / rate : null, leftAtReset: Math.max(0, b.leftPct - rate * (b.resetMs - now)) };
 }
@@ -618,7 +618,7 @@ const buildSummaryText = () => (snapshot && snapshot.groups.length ? snapshot.gr
 // -- 原生面板组件（420px 双焦点圆环仪表 · 方案 A） --
 const pickHeroBuckets = buckets => { if (!buckets || !buckets.length) return []; const lead = buckets[0], second = buckets.find(b => b.family !== lead.family) || buckets[1]; return second ? [lead, second] : [lead]; };
 const IconButton = (name, label, onClick, busy = false) => h("Column", { width: 28, height: 28, center: true, radius: 7, shrink: 0, label, tooltip: label, cursor: "pointer", hover: { background: K.hover }, pressed: { background: K.press }, onClick }, Icon(name, 15, K.muted, busy ? { keyframes: { duration: 900, repeat: -1, ease: "linear", frames: [{ at: 0, rotate: 0 }, { at: 1, rotate: 360 }] } } : null));
-const Header = () => h("Row", { gap: 9, padding: [11, 12, 9, 14], alignItems: "center", fillWidth: true },
+const Header = () => h("Row", { gap: 9, padding: [9, 12, 7, 14], alignItems: "center", fillWidth: true },
   h("Column", { width: 26, height: 26, center: true, radius: 7, background: "accentSubtle", shrink: 0 }, Icon("mark", 15, "accent")),
   h("Column", { gap: 1, grow: 1, minWidth: 0 },
     h("Row", { gap: 6, alignItems: "center", minWidth: 0 }, TX(TITLE, { fontSize: 14, fontWeight: 600, singleLine: true }), snapshot && snapshot.plan ? h("Badge", { text: snapshot.plan, fontSize: 10, fontWeight: 600, textColor: "accentText", background: "accent" }) : null),
@@ -630,11 +630,11 @@ function HeroDualRings(hero, activeKey) {
     const pill = fc.runsOutMs ? TX(fill(T.runsOut, { time: formatCountdown(fc.runsOutMs) }), { fontSize: 10, fontWeight: 600, fontFeatures: "tnum", textColor: b.leftPct <= 10 ? "danger" : "warning", background: K.hover, radius: 99, padding: [2, 7], singleLine: true })
       : b.leftPct <= 0 ? TX(T.exhausted, { fontSize: 10, fontWeight: 600, textColor: "danger", background: K.hover, radius: 99, padding: [2, 7], singleLine: true })
       : finite(d) ? TX(d >= 0 ? fill(T.aheadPace, { n: d }) : fill(T.behindPace, { n: d }), { fontSize: 10, fontWeight: 500, fontFeatures: "tnum", textColor: d <= -20 ? "warning" : K.muted, singleLine: true }) : null;
-    return h("Column", { key: `ring-${b.key}`, gap: 3, padding: [8, 8], radius: 10, alignItems: "center", minWidth: 0, fillWidth: true, cursor: "pointer", ...(isActive ? { background: "surface", border: [1, "border"] } : {}), hover: { background: K.hover }, onClick: () => { trendKey = b.key; $metrix.invalidate(); } },
+    return h("Column", { key: `ring-${b.key}`, gap: 3, padding: [7, 8], radius: 10, alignItems: "center", minWidth: 0, fillWidth: true, cursor: "pointer", ...(isActive ? { background: "surface", border: [1, "border"] } : {}), hover: { background: K.hover }, onClick: () => { trendKey = b.key; $metrix.invalidate(); } },
       h("Box", { width: RING, height: RING },
         h("Chart", { type: "pie", width: RING, height: RING, innerRadius: 0.8, padAngle: 0, hover: false, legend: false, appear: false, label: b.title, data: [{ value: Math.max(b.leftPct, 0.001), color: tone }, { value: Math.max(100 - b.leftPct, 0.001), color: "#80808038" }] }),
         h("Column", { absolute: true, top: 0, left: 0, width: RING, height: RING, center: true, gap: 0 },
-          TX(pctText(b.leftPct), { fontSize: 19, fontWeight: 650, fontFeatures: "tnum", letterSpacing: -0.4, contentTransition: { numeric: true } }),
+          TX(pctText(b.leftPct), { fontSize: 18, fontWeight: 650, fontFeatures: "tnum", letterSpacing: -0.4, contentTransition: { numeric: true } }),
           TX(b.label, { fontSize: 10, textColor: K.muted, singleLine: true }))),
       TX(shortGroupName(b.groupTitle), { fontSize: 12, fontWeight: 600, singleLine: true }),
       h("Row", { gap: 4, alignItems: "center", tooltip: formatResetStamp(b.resetMs) }, Icon("clock", 10, K.muted), TX(`${formatCountdown(b.resetMs)} · ${formatShortReset(b.resetMs)}`, { fontSize: 10.5, textColor: K.muted, fontFeatures: "tnum", singleLine: true })),
@@ -649,11 +649,11 @@ function GroupSection(g, activeKey, forceExpand) {
   const expanded = forceExpand || expandedGroups.has(g.key), models = g.models || [], uniqueNames = [];
   for (const m of models) { const base = m.displayName.replace(/\s*\([^)]*\)\s*$/, "").trim(); if (base && !uniqueNames.includes(base)) { uniqueNames.push(base); if (uniqueNames.length === 3) break; } }
   const preview = uniqueNames.join(", ");
-  return h("Column", { key: `grp-${g.key}`, gap: 5, fillWidth: true, minWidth: 0 },
+  return h("Column", { key: `grp-${g.key}`, gap: 4, fillWidth: true, minWidth: 0 },
     h("Row", { gap: 7, alignItems: "center", fillWidth: true, minWidth: 0 }, Icon(g.family === "gemini" ? "sparkle" : "bot", 14, "accent"), TX(g.title, { fontSize: 13, fontWeight: 650, singleLine: true, shrink: 0 }), preview ? TX(`${preview}${models.length > uniqueNames.length ? " …" : ""}`, { fontSize: 11, textColor: K.muted, singleLine: true, grow: 1, shrink: 1, minWidth: 0, textAlign: "end" }) : h("Spacer")),
     h("Column", { gap: 3, fillWidth: true }, g.buckets.map(b => {
       const isActive = b.key === activeKey, pace = bucketPace(b), fast = (pace && pace.paceDelta <= -20) || b.leftPct <= 0;
-      return h("Column", { key: `b-${b.key}`, gap: 4, padding: [4, 7], radius: 8, fillWidth: true, minWidth: 0, cursor: "pointer", ...(isActive ? { background: "surface", border: [1, "border"] } : {}), hover: { background: K.hover }, onClick: () => { trendKey = b.key; $metrix.invalidate(); } },
+      return h("Column", { key: `b-${b.key}`, gap: 3, padding: [4, 7], radius: 8, fillWidth: true, minWidth: 0, cursor: "pointer", ...(isActive ? { background: "surface", border: [1, "border"] } : {}), hover: { background: K.hover }, onClick: () => { trendKey = b.key; $metrix.invalidate(); } },
         h("Row", { gap: 6, alignItems: "center", fillWidth: true, minWidth: 0 },
           TX(b.label, { fontSize: 11.5, fontWeight: 650, textColor: isActive ? "accent" : "text", singleLine: true, shrink: 0 }),
           fast ? TX(b.leftPct <= 0 ? T.exhausted : T.fastBurn, { fontSize: 9.5, fontWeight: 600, textColor: b.leftPct <= 0 ? "danger" : "warning", background: K.hover, radius: 4, padding: [1, 5], shrink: 0 }) : null,
@@ -692,7 +692,7 @@ function TrendSection(buckets, active) {
   if (!list.length) return null;
   const cur = (active && list.find(b => b.key === active.key)) || list[0], pace = bucketPace(cur), fc = forecastBucket(cur);
   const status = [pace ? fill(T.elapsed, { n: Math.round(pace.elapsedPct) }) : "", fc.runsOutMs ? fill(T.runsOut, { time: formatCountdown(fc.runsOutMs) }) : cur.leftPct <= 0 ? T.exhausted : pace ? (pace.paceDelta >= 0 ? fill(T.aheadPace, { n: Math.round(pace.paceDelta) }) : fill(T.behindPace, { n: Math.round(pace.paceDelta) })) : ""].filter(Boolean).join(" · ");
-  return h("Column", { key: "trend-section", gap: 6, fillWidth: true },
+  return h("Column", { key: "trend-section", gap: 5, fillWidth: true },
     h("Divider"),
     h("Row", { gap: 8, alignItems: "center", fillWidth: true },
       TX(T.trendTitle, { fontSize: 12, fontWeight: 650, singleLine: true, shrink: 0 }), h("Spacer"),
@@ -701,13 +701,13 @@ function TrendSection(buckets, active) {
       TX(pctText(cur.leftPct), { fontSize: 11.5, fontWeight: 650, fontFeatures: "tnum", textColor: quotaTone(cur.leftPct), shrink: 0 }),
       TX(status || cur.title, { fontSize: 11, textColor: K.muted, fontFeatures: "tnum", singleLine: true, grow: 1, shrink: 1, minWidth: 0 }),
       TX(formatCountdown(cur.resetMs), { fontSize: 10.5, textColor: K.muted, fontFeatures: "tnum", shrink: 0 })),
-    TrendChart(cur, 86, true), PastCyclesChart(cur));
+    TrendChart(cur, 72, true), PastCyclesChart(cur));
 }
 const Skeleton = () => h("Column", { gap: 12, padding: [12, 14, 14, 14], fillWidth: true },
   h("Grid", { columns: 2, gap: 10, fillWidth: true }, [0, 1].map(i => h("Column", { key: `sk-r-${i}`, alignItems: "center", gap: 8 }, h("Box", { width: RING, height: RING, radius: RING / 2, background: K.hover }), h("Box", { width: 72, height: 10, radius: 5, background: K.hover })))),
   h("Row", { gap: 8, fillWidth: true }, h("Box", { width: 136, height: 28, radius: 8, background: K.hover }), h("Box", { grow: 1, height: 28, radius: 8, background: K.hover })),
   [0, 1].map(i => h("Column", { key: `sk-b-${i}`, gap: 6, fillWidth: true }, h("Box", { width: 120, height: 11, radius: 4, background: K.hover }), h("Box", { height: 6, radius: 3, background: K.hover, fillWidth: true }))),
-  h("Box", { height: 86, radius: 8, background: K.hover, fillWidth: true }));
+  h("Box", { height: 72, radius: 8, background: K.hover, fillWidth: true }));
 const Problem = detail => h("Column", { grow: 1, center: true, gap: 8, padding: [28, 24] }, Icon("alert", 22, "danger"), TX(T.failed, { fontSize: 14, fontWeight: 600, textAlign: "center" }), TX(detail, { fontSize: 12, textColor: K.muted, textAlign: "center", lineHeight: 1.4, wrap: true }), h("Row", { margin: [6, 0, 0, 0] }, h("Button", { onClick: () => launchRefresh(true) }, T.tryAgain)));
 
 function Body(env) {
@@ -716,7 +716,7 @@ function Body(env) {
   const hero = pickHeroBuckets(snapshot.buckets), active = snapshot.buckets.find(b => b.key === trendKey) || hero[0] || snapshot.buckets[0] || null;
   const filtered = q ? snapshot.models.filter(m => `${m.displayName} ${m.id}`.toLowerCase().includes(q)) : snapshot.models;
   const groups = q ? snapshot.groups.map(g => { const ms = (g.models || []).filter(m => `${m.displayName} ${m.id}`.toLowerCase().includes(q)); return ms.length || `${g.title} ${g.buckets.map(b => b.label).join(" ")}`.toLowerCase().includes(q) ? { ...g, models: ms.length ? ms : g.models } : null; }).filter(Boolean) : snapshot.groups;
-  return h("Column", { gap: 9, padding: [8, 14, 10, 14], fillWidth: true, minWidth: 0 },
+  return h("Column", { gap: 8, padding: [7, 14, 8, 14], fillWidth: true, minWidth: 0 },
     error ? h("Row", { gap: 8, padding: [8, 10], radius: 8, background: K.hover, alignItems: "center", fillWidth: true }, Icon("alert", 14, "danger"), TX(error, { fontSize: 12, grow: 1, shrink: 1, minWidth: 0, wrap: true })) : null,
     accounts.length > 1 ? h("Select", { key: "acct-select", value: String(activeIdx ?? 0), fillWidth: true, items: accounts.map((a, i) => ({ label: a.label, value: String(i) })), onChange: v => { const idx = Number(v); if (Number.isInteger(idx) && idx >= 0 && idx < accounts.length) { activeIdx = idx; try { localStorage.setItem("antigravity.accountIdx", String(idx)); } catch {} launchRefresh(false); } } }) : null,
     hero.length ? HeroDualRings(hero, active ? active.key : "") : null,
@@ -725,7 +725,7 @@ function Body(env) {
       h("SearchField", { key: "model-search", value: search, placeholder: T.searchPlaceholder, grow: 1, onChange: v => { search = String(v); $metrix.invalidate(); } })),
     !snapshot.models.length && !snapshot.groups.length ? h("Column", { padding: [20, 12], center: true }, TX(T.noModels, { fontSize: 12, textColor: K.muted, textAlign: "center", wrap: true }))
       : viewMode === "grid" ? (!filtered.length ? h("Column", { padding: [20, 12], center: true }, TX(T.noMatch, { fontSize: 12, textColor: K.muted, textAlign: "center" })) : h("Grid", { columns: gridCols, gap: 8, fillWidth: true }, filtered.map(ModelCard)))
-      : (!groups.length ? h("Column", { padding: [20, 12], center: true }, TX(T.noMatch, { fontSize: 12, textColor: K.muted, textAlign: "center" })) : h("Column", { gap: 7, fillWidth: true }, groups.flatMap((g, i) => (i > 0 ? [h("Divider"), GroupSection(g, active ? active.key : "", Boolean(q))] : [GroupSection(g, active ? active.key : "", Boolean(q))])))),
+      : (!groups.length ? h("Column", { padding: [20, 12], center: true }, TX(T.noMatch, { fontSize: 12, textColor: K.muted, textAlign: "center" })) : h("Column", { gap: 6, fillWidth: true }, groups.flatMap((g, i) => (i > 0 ? [h("Divider"), GroupSection(g, active ? active.key : "", Boolean(q))] : [GroupSection(g, active ? active.key : "", Boolean(q))])))),
     !q ? TrendSection(snapshot.buckets, active) : null);
 }
 const Footer = () => h("Row", { gap: 6, padding: [7, 14], alignItems: "center", fillWidth: true }, TX(snapshot && snapshot.origin ? snapshot.origin.replace(/^https?:\/\//, "") : "daily-cloudcode-pa.googleapis.com", { fontSize: 10, textColor: K.muted, singleLine: true, shrink: 1, minWidth: 0 }), h("Spacer"), TX(snapshot && snapshot.fetchedAt ? `${formatUpdated(snapshot.fetchedAt)} · 15m` : error ? T.failed : T.loading, { fontSize: 10, textColor: K.muted, fontFeatures: "tnum", shrink: 0 }));
