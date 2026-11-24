@@ -1,4 +1,4 @@
-<bar protocol-version="0" min-app-version="0.3.2" id="antigravity" title="Antigravity" version="1.3.0"
+<bar protocol-version="0" min-app-version="0.3.2" id="antigravity" title="Antigravity" version="1.4.0"
      category="ai" license="AGPL-3.0-only" homepage="https://github.com/imwarn/metrix.bar"
      description="Monitor Antigravity model quotas, reset countdowns, and local usage trends."
      refresh="15m" material="glass" placements="menubar" open-mode="flyout" window-style="standard"
@@ -28,14 +28,17 @@
       <option value="prod" label="Production (cloudcode-pa.googleapis.com)"><locale lang="zh-Hans" label="生产环境（cloudcode-pa.googleapis.com）" /></option>
     </input>
     <input name="accountIndex" type="integer" label="Default Account Index" default="0" help="Zero-based index used when an auth JSON file contains multiple accounts."><locale lang="zh-Hans" label="默认账号索引" help="当认证 JSON 包含多账号时默认读取的索引（从 0 开始）。" /></input>
-    <input name="notchActivity" type="bool" label="Warn in the notch when quota is low" default="true" help="Briefly highlight Antigravity in the notch when any active quota bucket drops to 20% or below."><locale lang="zh-Hans" label="额度偏低时在刘海中提醒" help="当任意配额桶剩余降至 20% 及以下时，在刘海中短暂优先展示 Antigravity。" /></input>
+    <input name="notchActivity" type="bool" label="Warn in the notch when quota is low" default="true" help="Briefly highlight Antigravity in the notch when any active quota bucket hits the low-quota threshold or is projected to run out early."><locale lang="zh-Hans" label="额度偏低或预警时在刘海中提醒" help="当任意配额桶剩余降至低额度告警阈值及以下或预计提前耗尽时，在刘海中短暂优先展示 Antigravity。" /></input>
+    <input name="lowQuotaThreshold" type="integer" label="Low Quota Alert Threshold (%)" default="20" help="Highlight Antigravity in the notch when any active quota bucket drops to or below this percentage (0–95)."><locale lang="zh-Hans" label="低额度告警阈值（%）" help="当任意配额桶剩余降至该百分比及以下（0–95）时触发刘海提醒与告警着色。" /></input>
+    <input name="notchForecastAlert" type="bool" label="Warn in the notch when pace runs out early" default="true" help="Also highlight Antigravity in the notch when current consumption pace is projected to exhaust a bucket before reset."><locale lang="zh-Hans" label="预计提前耗尽时在刘海中预警" help="参考官方 Claude Code 看板，当按当前消耗速率预计在重置前提前用完配额时，在刘海岛短暂优先提醒。" /></input>
+    <input name="richTray" type="bool" label="Dual-family rich menu bar item (macOS)" default="false" help="Show both Gemini and Claude/GPT lowest quota buckets stacked in the macOS menu bar via native tray.content."><locale lang="zh-Hans" label="启用双行富托盘（macOS）" help="在 macOS 菜单栏通过原生 tray.content 双行同屏展示 Gemini 与 Claude/GPT 最低余量。" /></input>
   </inputs>
-  <docs><![CDATA[默认优先静默读取本机 Antigravity / agy 1.5+ 在 ~/.gemini/ 下维护的登录态文件（无钥匙串弹窗），并在内存中缓存有效凭据；仅当本地文件不存在时才在首次启动或手动刷新时回退读取系统钥匙串（gemini / antigravity）。日常按 15 分钟周期单发 retrieveUserQuotaSummary 低频更新 5H 与 WEEKLY 配额，24 小时持久化缓存套餐/项目/模型目录，切换到“卡片网格”时按需拉取单模型实时明细。]]></docs>
+  <docs><![CDATA[默认优先静默读取本机 Antigravity / agy 1.5+ 在 ~/.gemini/ 下维护的登录态文件（无钥匙串弹窗），并在内存中缓存有效凭据；仅当本地文件不存在时才在首次启动或手动刷新时回退读取系统钥匙串（gemini / antigravity）。日常按 15 分钟周期单发 retrieveUserQuotaSummary 低频更新 5H 与 WEEKLY 配额，24 小时持久化缓存套餐/项目/模型目录，切换到“卡片网格”时按需拉取单模型实时明细；支持按需开启 macOS 原生双行富托盘（tray.content），并可自定义低额度告警阈值与预计提前耗尽时的刘海预警。]]></docs>
   <script apis="sqlite clipboard localStorage sockets"><![CDATA[
 /**
  * [INPUT]: 依赖 Metrix.Bar 宿主 $metrix（readFile/readCredential/secret/sqlite/caniuse）、localStorage、cloudflare:sockets TLS 与 Cloud Code API
- * [OUTPUT]: 导出 Metrix.Bar Worker（scheduled/render/event），低频单请求查询配额并渲染托盘、5H+WEEKLY 分组/新模型网格面板、Notch 与桌面小组件
- * [POS]: dashboards/antigravity 唯一看板源文件，被 Metrix.Bar 直接加载并由 antigravity.test.cjs 做离线单测
+ * [OUTPUT]: 导出 Metrix.Bar Worker（scheduled/render/event），低频单请求查询配额并渲染 420px 双焦点圆环仪表、匀速刻度 PaceBar、趋势预测、精简模型胶囊、按需双行富托盘（tray.content）及可配置阈值/提前耗尽预警 Notch/Widget
+ * [POS]: dashboards/antigravity 唯一看板源文件（v1.4.0），被 Metrix.Bar 直接加载并由 antigravity.test.cjs 做离线单测
  * [PROTOCOL]: Update this header on change, then check GEMINI.md
  */
 // SPDX-License-Identifier: AGPL-3.0-only
@@ -48,11 +51,11 @@ const TITLE = "Antigravity";
 const ENDPOINTS = { daily: "https://daily-cloudcode-pa.googleapis.com", prod: "https://cloudcode-pa.googleapis.com" };
 const LOCAL_TOKEN_FILES = ["~/.gemini/jetski-standalone-oauth-token", "~/.gemini/antigravity-cli/antigravity-oauth-token"];
 const DEFAULT_OAUTH_CLIENT_ID = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
-const AGY_USER_AGENT = "Metrix.Bar/1.3 (antigravity/cli/1.5.15)";
+const AGY_USER_AGENT = "Metrix.Bar/1.4 (antigravity/cli/1.5.15)";
 const GO_KEYRING_PREFIX = "go-keyring-base64:";
 const K = { muted: "textMuted", hover: "surfaceHover", press: "surfacePressed", track: "border" };
-const AUTH_MARGIN_MS = 120e3, EXPAND_STALE_MS = 300e3, META_TTL_MS = 24 * 3600e3;
-const CYCLE_SLACK = 15 * 60e3, KEEP_MS = 35 * 864e5, LOW_QUOTA_THRESHOLD = 20;
+const AUTH_MARGIN_MS = 120e3, EXPAND_STALE_MS = 300e3, META_TTL_MS = 24 * 3600e3, H5 = 5 * 3600e3, D7 = 7 * 864e5;
+const CYCLE_SLACK = 15 * 60e3, KEEP_MS = 35 * 864e5, LOW_QUOTA_THRESHOLD = 20, RING = 84;
 
 // -- 图标与双语文案 --
 const svg = (body, fill = false) => `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" ${fill ? 'fill="currentColor"' : 'fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"'}>${body}</svg>`;
@@ -69,87 +72,32 @@ const ICON = {
 const Icon = (name, size = 14, color = K.muted, extra) => h("Icon", { svg: ICON[name] || ICON.mark, fontSize: size, width: size, height: size, textColor: color, shrink: 0, ...extra });
 
 const STRINGS = {
-  en: {
-    refresh: "Refresh", copySummary: "Copy summary", copied: "Copied {text}", loading: "Loading Antigravity quotas…", failed: "Couldn’t load quotas",
-    reconnect: "Run `agy` to sign in or refresh your token, then retry.", tryAgain: "Try again", noModels: "No active quota buckets were returned for this account.",
-    noMatch: "No models match your search.", searchPlaceholder: "Search model name or ID", viewGrouped: "Grouped", viewGrid: "Grid",
-    modelsCount: "{n} models", modelCountOne: "1 model", lowestQuota: "Lowest", nextReset: "Next reset", activeModels: "Quota models", trend: "Quota trend",
-    remaining: "Left", resetUnknown: "Reset time unknown", resetNow: "Soon", updatedNow: "Updated just now", updatedAgo: "Updated {time} ago",
-    showAll: "Show all {n} models", collapse: "Collapse", authInvalid: "The Antigravity credential data is not valid JSON.", authNoToken: "No access_token or refresh_token found in credentials.",
-    authNotFound: "No local `agy` login found (checked ~/.gemini and Keychain). Run `agy` in Terminal to sign in first.",
-    keychainDenied: "macOS Keychain access was denied (click “Always Allow” in the prompt, or run `agy` once to write ~/.gemini token files).",
-    keychainAccessOrMissing: "No ~/.gemini token found and Keychain could not be read (if prompted click “Always Allow”, or run `agy` in Terminal to sign in).",
-    authFileError: "Cannot read the configured Auth JSON file ({path}): {reason}",
-    tokenExpired: "The access_token has expired. Run `agy` in Terminal to renew it and click Refresh, or set OAuth Client Secret in Inputs.",
-    refreshFailed: "OAuth token refresh failed (HTTP {status}). Run `agy` to sign in again.", expired: "Authentication expired (HTTP {status}). Run `agy` to refresh your login.",
-    rateLimited: "Cloud Code API rate limited this request. Try again shortly.", httpError: "Cloud Code API returned HTTP {status}.",
-    networkError: "Unable to reach Cloud Code API. Check your network or proxy settings.", invalidResp: "Cloud Code API returned an invalid response.",
-  },
-  "zh-Hans": {
-    refresh: "刷新", copySummary: "复制额度摘要", copied: "已复制 {text}", loading: "正在加载 Antigravity 模型额度…", failed: "无法加载额度",
-    reconnect: "请在终端运行 `agy` 登录或续期令牌后重试。", tryAgain: "重试", noModels: "当前账号未返回有效配额数据。",
-    noMatch: "没有匹配的模型，请调整搜索关键词。", searchPlaceholder: "搜索模型名称或 ID", viewGrouped: "配额分组", viewGrid: "卡片网格",
-    modelsCount: "{n} 个模型", modelCountOne: "1 个模型", lowestQuota: "最低剩余", nextReset: "最近重置", activeModels: "有额度模型", trend: "剩余趋势",
-    remaining: "剩余", resetUnknown: "重置时间未知", resetNow: "即将重置", updatedNow: "刚刚更新", updatedAgo: "{time}前更新",
-    showAll: "展开全部 {n} 个模型", collapse: "收起", authInvalid: "Antigravity 认证数据不是有效的 JSON。", authNoToken: "凭据中未找到 access_token 或 refresh_token。",
-    authNotFound: "本机未找到 agy 登录记录（已检查 ~/.gemini 与系统钥匙串，请先在终端完成 `agy` 登录）。",
-    keychainDenied: "系统钥匙串拒绝访问（请在弹窗点击“始终允许”，或在终端运行一次 `agy` 生成 ~/.gemini 本地登录态）。",
-    keychainAccessOrMissing: "未找到 ~/.gemini 本地登录文件，且系统钥匙串读取失败（若弹出钥匙串窗口请点击“始终允许”；若未登录请先在终端完成 `agy` 登录）。",
-    authFileError: "无法读取指定的认证文件（{path}）：{reason}",
-    tokenExpired: "登录令牌已过期（请在终端运行一次 `agy` 续期后点击右上角刷新，或在设置中配置 OAuth Client Secret）。",
-    refreshFailed: "OAuth 令牌续期失败（HTTP {status}），请重新运行 `agy` 登录。", expired: "登录认证已失效（HTTP {status}），请运行 `agy` 刷新令牌后点击刷新。",
-    rateLimited: "Cloud Code 接口请求受限（HTTP 429），请稍后重试。", httpError: "Cloud Code 接口返回 HTTP {status}。",
-    networkError: "无法连接 Cloud Code 接口，请检查网络或代理设置。", invalidResp: "Cloud Code 接口返回了无法解析的数据。",
-  },
+  en: { refresh: "Refresh", copySummary: "Copy summary", copied: "Copied {text}", loading: "Loading Antigravity quotas…", failed: "Couldn’t load quotas", reconnect: "Run `agy` to sign in or refresh your token, then retry.", tryAgain: "Try again", noModels: "No active quota buckets were returned for this account.", noMatch: "No models match your search.", searchPlaceholder: "Search model name or ID", viewGrouped: "Grouped", viewGrid: "Grid", modelsCount: "{n} models", trendTitle: "Trend", remaining: "Left", pace: "Pace", forecast: "Forecast", pastCycles: "Past cycles left", pastCount: "Last {n}", runsOut: "Runs out {time}", aheadPace: "+{n}% vs pace", behindPace: "{n}% vs pace", fastBurn: "Fast", exhausted: "Depleted", elapsed: "{n}% elapsed", resets: "Resets {time}", weekShort: "7d", tagRec: "Top", tagUtil: "Util", resetUnknown: "Reset time unknown", resetNow: "Soon", updatedNow: "Updated just now", updatedAgo: "Updated {time} ago", showAll: "Show all {n} models", collapse: "Collapse", weekdays: ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"], months: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], dateFmt: "{month} {day}", authInvalid: "The Antigravity credential data is not valid JSON.", authNoToken: "No access_token or refresh_token found in credentials.", authNotFound: "No local `agy` login found (checked ~/.gemini and Keychain). Run `agy` in Terminal to sign in first.", keychainDenied: "macOS Keychain access was denied (click “Always Allow” in the prompt, or run `agy` once to write ~/.gemini token files).", keychainAccessOrMissing: "No ~/.gemini token found and Keychain could not be read (if prompted click “Always Allow”, or run `agy` in Terminal to sign in).", authFileError: "Cannot read the configured Auth JSON file ({path}): {reason}", tokenExpired: "The access_token has expired. Run `agy` in Terminal to renew it and click Refresh, or set OAuth Client Secret in Inputs.", refreshFailed: "OAuth token refresh failed (HTTP {status}). Run `agy` to sign in again.", expired: "Authentication expired (HTTP {status}). Run `agy` to refresh your login.", rateLimited: "Cloud Code API rate limited this request. Try again shortly.", httpError: "Cloud Code API returned HTTP {status}.", networkError: "Unable to reach Cloud Code API. Check your network or proxy settings.", invalidResp: "Cloud Code API returned an invalid response." },
+  "zh-Hans": { refresh: "刷新", copySummary: "复制额度摘要", copied: "已复制 {text}", loading: "正在加载 Antigravity 模型额度…", failed: "无法加载额度", reconnect: "请在终端运行 `agy` 登录或续期令牌后重试。", tryAgain: "重试", noModels: "当前账号未返回有效配额数据。", noMatch: "没有匹配的模型，请调整搜索关键词。", searchPlaceholder: "搜索模型名称或 ID", viewGrouped: "配额分组", viewGrid: "模型网格", modelsCount: "{n} 个模型", trendTitle: "趋势", remaining: "剩余", pace: "匀速", forecast: "预测", pastCycles: "历史周期期末余量", pastCount: "近 {n} 期", runsOut: "预计 {time} 用完", aheadPace: "较匀速 +{n}%", behindPace: "快于匀速 {n}%", fastBurn: "偏快", exhausted: "已耗尽", elapsed: "时段已过 {n}%", resets: "{time} 重置", weekShort: "周", tagRec: "推荐", tagUtil: "工具", resetUnknown: "重置时间未知", resetNow: "即将重置", updatedNow: "刚刚更新", updatedAgo: "{time}前更新", showAll: "展开全部 {n} 个模型", collapse: "收起", weekdays: ["周日", "周一", "周二", "周三", "周四", "周五", "周六"], months: ["1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"], dateFmt: "{month}{day}日", authInvalid: "Antigravity 认证数据不是有效的 JSON。", authNoToken: "凭据中未找到 access_token 或 refresh_token。", authNotFound: "本机未找到 agy 登录记录（已检查 ~/.gemini 与系统钥匙串，请先在终端完成 `agy` 登录）。", keychainDenied: "系统钥匙串拒绝访问（请在弹窗点击“始终允许”，或在终端运行一次 `agy` 生成 ~/.gemini 本地登录态）。", keychainAccessOrMissing: "未找到 ~/.gemini 本地登录文件，且系统钥匙串读取失败（若弹出钥匙串窗口请点击“始终允许”；若未登录请先在终端完成 `agy` 登录）。", authFileError: "无法读取指定的认证文件（{path}）：{reason}", tokenExpired: "登录令牌已过期（请在终端运行一次 `agy` 续期后点击右上角刷新，或在设置中配置 OAuth Client Secret）。", refreshFailed: "OAuth 令牌续期失败（HTTP {status}），请重新运行 `agy` 登录。", expired: "登录认证已失效（HTTP {status}），请运行 `agy` 刷新令牌后点击刷新。", rateLimited: "Cloud Code 接口请求受限（HTTP 429），请稍后重试。", httpError: "Cloud Code 接口返回 HTTP {status}。", networkError: "无法连接 Cloud Code 接口，请检查网络或代理设置。", invalidResp: "Cloud Code 接口返回了无法解析的数据。" },
 };
 const T = STRINGS[(() => { for (const tag of (typeof navigator !== "undefined" && navigator.languages) || []) { if (String(tag).toLowerCase().startsWith("zh")) return "zh-Hans"; if (String(tag).toLowerCase().startsWith("en")) return "en"; } return "zh-Hans"; })()];
 const fill = (s, v) => String(s).replace(/\{(\w+)\}/g, (_, k) => (v && v[k] != null ? String(v[k]) : ""));
 
-// -- 格式化与语义色 --
-const finite = v => typeof v === "number" && Number.isFinite(v);
-const clampPct = v => Math.max(0, Math.min(100, Math.round(v)));
-const pctText = v => (finite(v) ? `${clampPct(v)}%` : "—");
-const quotaTone = v => (!finite(v) ? "textMuted" : v <= 10 ? "danger" : v <= 30 ? "warning" : "success");
-const widgetTone = v => (!finite(v) ? "secondary" : v <= 10 ? "error" : v <= 30 ? "warning" : "success");
-const pad2 = n => String(n).padStart(2, "0");
-const formatResetStamp = ms => { if (!finite(ms)) return T.resetUnknown; const d = new Date(ms); return `${d.getFullYear()}/${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`; };
-function formatCountdown(ms, now = Date.now()) {
-  if (!finite(ms)) return "—";
-  const diff = ms - now;
-  if (diff <= 0) return T.resetNow;
-  const minsTotal = Math.floor(diff / 60e3), days = Math.floor(minsTotal / 1440), hours = Math.floor((minsTotal % 1440) / 60), mins = minsTotal % 60;
-  return days > 0 ? (hours > 0 ? `${days}d ${hours}h` : `${days}d`) : hours > 0 ? (mins > 0 ? `${hours}h ${mins}m` : `${hours}h`) : `${Math.max(1, mins)}m`;
-}
-function formatUpdated(ts, now = Date.now()) {
-  if (!ts) return "";
-  const secs = Math.max(0, Math.floor((now - ts) / 1000));
-  if (secs < 45) return T.updatedNow;
-  return fill(T.updatedAgo, { time: secs < 3600 ? `${Math.floor(secs / 60)}m` : secs < 86400 ? `${Math.floor(secs / 3600)}h` : `${Math.floor(secs / 86400)}d` });
-}
-function parseTimestamp(raw) {
-  if (raw == null || raw === "") return NaN;
-  if (typeof raw === "number" && Number.isFinite(raw)) return raw < 1e12 ? raw * 1000 : raw;
-  if (typeof raw === "string") { const s = raw.trim(); if (/^\d+(\.\d+)?$/.test(s)) { const n = Number(s); return n < 1e12 ? n * 1000 : n; } const p = Date.parse(s); return Number.isFinite(p) ? p : NaN; }
-  return NaN;
-}
-function decodeBase64Utf8(b64) {
-  const bin = atob(String(b64 || "").replace(/\s+/g, "")), bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return typeof TextDecoder === "function" ? new TextDecoder().decode(bytes) : bin;
-}
-function jwtEmail(idToken) {
-  const part = typeof idToken === "string" ? idToken.split(".")[1] : "";
-  if (!part) return "";
-  try { const c = JSON.parse(decodeBase64Utf8(part.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((part.length + 3) % 4))); return typeof c.email === "string" ? c.email.trim() : ""; } catch { return ""; }
-}
+// -- 格式化、语义色与短标签 --
+const finite = v => typeof v === "number" && Number.isFinite(v), clampPct = v => Math.max(0, Math.min(100, Math.round(v))), pctText = v => (finite(v) ? `${clampPct(v)}%` : "—");
+const effectiveThreshold = () => { const raw = inputs.lowQuotaThreshold; if (raw === undefined || raw === null || raw === "") return LOW_QUOTA_THRESHOLD; const n = Number(raw); return Number.isFinite(n) ? Math.max(0, Math.min(95, Math.round(n))) : LOW_QUOTA_THRESHOLD; };
+const quotaTone = v => (!finite(v) ? "textMuted" : v <= 10 ? "danger" : v <= Math.max(30, effectiveThreshold()) ? "warning" : "success"), widgetTone = v => (!finite(v) ? "secondary" : v <= 10 ? "error" : v <= Math.max(30, effectiveThreshold()) ? "warning" : "success");
+const pad2 = n => String(n).padStart(2, "0"), hhmm = d => `${pad2(d.getHours())}:${pad2(d.getMinutes())}`, dateOf = d => fill(T.dateFmt, { month: T.months[d.getMonth()], day: d.getDate() });
+const formatResetStamp = ms => { if (!finite(ms)) return T.resetUnknown; const d = new Date(ms); return `${d.getFullYear()}/${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} ${hhmm(d)}:${pad2(d.getSeconds())}`; };
+const formatShortReset = (ms, now = Date.now()) => { if (!finite(ms)) return "—"; const d = new Date(ms); return ms - now < 864e5 ? hhmm(d) : `${T.weekdays[d.getDay()]} ${hhmm(d)}`; };
+const formatCountdown = (ms, now = Date.now()) => { if (!finite(ms)) return "—"; const diff = ms - now; if (diff <= 0) return T.resetNow; const m = Math.floor(diff / 60e3), d = Math.floor(m / 1440), hr = Math.floor((m % 1440) / 60), mn = m % 60; return d > 0 ? (hr > 0 ? `${d}d ${hr}h` : `${d}d`) : hr > 0 ? (mn > 0 ? `${hr}h ${mn}m` : `${hr}h`) : `${Math.max(1, mn)}m`; };
+const formatUpdated = (ts, now = Date.now()) => { if (!ts) return ""; const s = Math.max(0, Math.floor((now - ts) / 1000)); return s < 45 ? T.updatedNow : fill(T.updatedAgo, { time: s < 3600 ? `${Math.floor(s / 60)}m` : s < 86400 ? `${Math.floor(s / 3600)}h` : `${Math.floor(s / 86400)}d` }); };
+const shortModelLabel = m => { const raw = String((m && (m.displayName || m.id)) || "").trim(); return raw ? raw.replace(/^Gemini\s+4\s+/i, "").replace(/^Gemini\s+(?=\d)/i, "").replace(/^Claude\s+/i, "").replace(/\s*\(([^)]+)\)\s*/g, " $1 ").replace(/\s+Preview$/i, "").replace(/\s+/g, " ").trim() || raw : ""; };
+const shortBucketChip = b => { const fam = b.family === "gemini" ? "Gem" : (b.family === "claude" || b.family === "gpt") ? "C&G" : shortGroupName(b.groupTitle).slice(0, 5), lbl = String(b.label || "").toUpperCase(); return `${fam} ${lbl.includes("ARGON") ? (T.weekShort === "周" ? "Arg周" : "Arg7d") : lbl.includes("WEEK") ? T.weekShort : lbl.includes("5H") ? "5H" : b.label}`.trim(); };
+const parseTimestamp = raw => { if (raw == null || raw === "") return NaN; if (typeof raw === "number" && Number.isFinite(raw)) return raw < 1e12 ? raw * 1000 : raw; if (typeof raw === "string") { const s = raw.trim(); if (/^\d+(\.\d+)?$/.test(s)) { const n = Number(s); return n < 1e12 ? n * 1000 : n; } const p = Date.parse(s); return Number.isFinite(p) ? p : NaN; } return NaN; };
+const decodeBase64Utf8 = b64 => { const bin = atob(String(b64 || "").replace(/\s+/g, "")), bytes = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i); return typeof TextDecoder === "function" ? new TextDecoder().decode(bytes) : bin; };
+const jwtEmail = idToken => { const part = typeof idToken === "string" ? idToken.split(".")[1] : ""; if (!part) return ""; try { const c = JSON.parse(decodeBase64Utf8(part.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((part.length + 3) % 4))); return typeof c.email === "string" ? c.email.trim() : ""; } catch { return ""; } };
 
 // -- 凭据解析、内存缓存（防钥匙串高频弹窗）与精确异常诊断 --
 function decodeCredentialPayload(raw) {
   const trimmed = String(raw || "").trim(), jsonText = trimmed.startsWith(GO_KEYRING_PREFIX) ? decodeBase64Utf8(trimmed.slice(GO_KEYRING_PREFIX.length)) : trimmed;
-  let doc;
-  try { doc = JSON.parse(jsonText); } catch { throw new Error(T.authInvalid); }
-  if (!doc || typeof doc !== "object") throw new Error(T.authInvalid);
-  return doc;
+  let doc; try { doc = JSON.parse(jsonText); } catch { throw new Error(T.authInvalid); }
+  if (!doc || typeof doc !== "object") throw new Error(T.authInvalid); return doc;
 }
 function normalizeAccount(entry, idx) {
   if (!entry || typeof entry !== "object") return null;
@@ -260,12 +208,9 @@ async function refreshAccessToken(account) {
   const clientSecret = account.clientSecret || (await readSecretCompat("oauthClientSecret"));
   if (!account.refreshToken || !clientId || !clientSecret) throw new Error(T.tokenExpired);
   const body = new URLSearchParams({ grant_type: "refresh_token", refresh_token: account.refreshToken, client_id: clientId, client_secret: clientSecret });
-  let res;
-  try { res = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" }, body: body.toString() }); } catch { throw new Error(T.networkError); }
-  const text = await res.text();
-  if (!res.ok) throw new Error(fill(T.refreshFailed, { status: res.status }));
-  let parsed;
-  try { parsed = JSON.parse(text); } catch { throw new Error(T.invalidResp); }
+  let res; try { res = await fetch("https://oauth2.googleapis.com/token", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" }, body: body.toString() }); } catch { throw new Error(T.networkError); }
+  const text = await res.text(); if (!res.ok) throw new Error(fill(T.refreshFailed, { status: res.status }));
+  let parsed; try { parsed = JSON.parse(text); } catch { throw new Error(T.invalidResp); }
   if (!parsed || typeof parsed.access_token !== "string" || !parsed.access_token) throw new Error(T.invalidResp);
   const next = { accessToken: parsed.access_token, expiresAt: Date.now() + (Number(parsed.expires_in) || 3600) * 1000 };
   tokenCache.set(account.key, next);
@@ -428,8 +373,9 @@ function parseQuotaModels(raw) {
     const remaining = finite(q.remainingFraction) ? q.remainingFraction * 100 : finite(q.remaining_fraction) ? q.remaining_fraction * 100 : finite(q.remainingPercentage) ? q.remainingPercentage : finite(q.remaining_percentage) ? q.remaining_percentage : finite(resetMs) ? 0 : NaN;
     if (!finite(remaining)) continue;
     const displayName = String(m.displayName || m.display_name || "").trim() || prettifyModelId(id), family = inferFamily(id, displayName), low = `${id} ${displayName}`.toLowerCase();
+    const spanMs = finite(resetMs) ? (resetMs - Date.now() > 24 * 3600e3 ? D7 : H5) : 0;
     out.push({
-      id, displayName, family, isPrimary: family === "gemini" && /argon|pro|flash/i.test(low), leftPct: Math.max(0, Math.min(100, remaining)), resetMs,
+      id, displayName, family, isPrimary: family === "gemini" && /argon|pro|flash/i.test(low), leftPct: Math.max(0, Math.min(100, remaining)), resetMs, spanMs,
       isUtility: (m.isInternal === true || /^tab_|^chat_|autocomplete|jump_/i.test(id)) ? 1 : 0,
       recommended: (m.recommended === true || m.isRecommended === true || /\bnew\b|\blatest\b/i.test(String(m.tagTitle || ""))) ? 1 : 0,
       pickerRank: pickerRank.has(id) ? pickerRank.get(id) : Infinity,
@@ -455,9 +401,10 @@ function parseQuotaSummaryGroups(raw, allModels) {
       if (!finite(remaining)) continue;
       const win = String(b.window || "").trim().toLowerCase(), isArgon = /argon/i.test(id);
       const is5h = win === "5h" || /(?:^|[-_])5h(?:$|[-_])/i.test(id), isWeekly = win === "weekly" || /weekly|7d/i.test(id);
+      const spanMs = is5h ? H5 : isWeekly ? D7 : 0;
       const label = isArgon && isWeekly ? "ARGON WEEKLY" : is5h ? "5H" : isWeekly ? "WEEKLY" : String(b.displayName || prettifyModelId(id)).toUpperCase();
       const windowRank = is5h ? 0 : isWeekly && !isArgon ? 1 : isArgon ? 2 : 3;
-      buckets.push({ id, key: id, label, title: `${shortTitle} · ${label}`, groupTitle: title, seriesKey: `bucket:${id}`, family, windowRank, leftPct: Math.max(0, Math.min(100, remaining)), resetMs });
+      buckets.push({ id, key: id, label, title: `${shortTitle} · ${label}`, groupTitle: title, seriesKey: `bucket:${id}`, family, windowRank, leftPct: Math.max(0, Math.min(100, remaining)), resetMs, spanMs });
     }
     if (!buckets.length) continue;
     buckets.sort((a, b) => a.windowRank - b.windowRank || a.label.localeCompare(b.label));
@@ -490,8 +437,9 @@ function buildGroups(models) {
   for (const g of groups) {
     g.title = g.models.length === 1 ? g.models[0].displayName : (commonTitlePrefix(g.models.map(m => m.displayName)) || familyLabel(g.family));
     const seriesKey = `${g.family}:${g.title.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
-    const label = finite(g.resetMs) && g.resetMs - Date.now() > 24 * 3600e3 ? "WEEKLY" : finite(g.resetMs) ? "5H" : T.remaining.toUpperCase();
-    g.buckets = [{ id: g.key, key: g.key, label, title: g.title, groupTitle: g.title, seriesKey, family: g.family, windowRank: 0, leftPct: g.leftPct, resetMs: g.resetMs }];
+    const isWeekly = finite(g.resetMs) && g.resetMs - Date.now() > 24 * 3600e3, is5h = finite(g.resetMs) && !isWeekly;
+    const label = isWeekly ? "WEEKLY" : is5h ? "5H" : T.remaining.toUpperCase(), spanMs = is5h ? H5 : isWeekly ? D7 : 0;
+    g.buckets = [{ id: g.key, key: g.key, label, title: g.title, groupTitle: g.title, seriesKey, family: g.family, windowRank: 0, leftPct: g.leftPct, resetMs: g.resetMs, spanMs }];
   }
   return groups.sort((a, b) => a.leftPct - b.leftPct || (a.resetMs || Infinity) - (b.resetMs || Infinity) || a.title.localeCompare(b.title));
 }
@@ -499,7 +447,7 @@ const flattenBuckets = groups => groups.flatMap(g => g.buckets || []).sort((a, b
 const stripCatalog = models => models.map(m => ({ id: m.id, displayName: m.displayName, family: m.family, isPrimary: m.isPrimary, isUtility: m.isUtility, recommended: m.recommended, pickerRank: finite(m.pickerRank) ? m.pickerRank : 9999, versionScore: m.versionScore, tierScore: m.tierScore, effortScore: m.effortScore }));
 const hydrateCatalog = (catalog, groups) => catalog.map(m => {
   const grp = groups.find(g => g.family === m.family || ((m.family === "claude" || m.family === "gpt") && g.family === "claude")), b = grp && grp.buckets && grp.buckets[0];
-  return { ...m, pickerRank: m.pickerRank >= 9999 ? Infinity : m.pickerRank, leftPct: b ? b.leftPct : 100, resetMs: b ? b.resetMs : NaN };
+  return { ...m, pickerRank: m.pickerRank >= 9999 ? Infinity : m.pickerRank, leftPct: b ? b.leftPct : 100, resetMs: b ? b.resetMs : NaN, spanMs: b ? b.spanMs : 0 };
 });
 
 function parseIneligibleReason(resp) {
@@ -519,19 +467,21 @@ function parseTier(resp) {
   return id === "free-tier" ? "Free" : id === "standard-tier" ? "Paid" : (resp.currentTier && typeof resp.currentTier.name === "string" && resp.currentTier.name.trim() ? fmt(resp.currentTier.name, id) : "");
 }
 
-// -- SQLite 历史趋势存储 --
+// -- SQLite 历史趋势、匀速节奏与消耗预测 --
 let db = null;
-const trends = {};
+const trends = {}, bucketSamples = b => (b && trends[b.seriesKey] && Array.isArray(trends[b.seriesKey].samples) ? trends[b.seriesKey].samples : []), bucketPast = b => (b && trends[b.seriesKey] && Array.isArray(trends[b.seriesKey].past) ? trends[b.seriesKey].past : []);
+const trendable = (b, now = Date.now()) => Boolean(b && finite(b.resetMs) && b.spanMs > 0 && b.resetMs > now);
+const bucketPace = (b, now = Date.now()) => { if (!trendable(b, now)) return null; const elapsedPct = Math.max(0, Math.min(100, 100 - ((b.resetMs - now) / b.spanMs) * 100)), paceLeftPct = 100 - elapsedPct; return { elapsedPct, paceLeftPct, paceDelta: b.leftPct - paceLeftPct }; };
+function forecastBucket(b, now = Date.now()) {
+  if (!trendable(b, now)) return { empty: Boolean(b && b.leftPct <= 0), rate: 0, runsOutMs: null, leftAtReset: b ? b.leftPct : 0 };
+  if (b.leftPct <= 0) return { empty: true, rate: 0, runsOutMs: null, leftAtReset: 0 };
+  const start = b.resetMs - b.spanMs, since = now - Math.max(3600e3, b.spanMs / 7), base = bucketSamples(b).find(s => s.ts >= since && s.ts <= now - 30 * 60e3);
+  const from = base || { ts: start, left_pct: 100 }, rate = now > from.ts ? Math.max(0, (from.left_pct - b.leftPct) / (now - from.ts)) : 0;
+  return { empty: false, rate, runsOutMs: rate > 0 && now + b.leftPct / rate < b.resetMs ? now + b.leftPct / rate : null, leftAtReset: Math.max(0, b.leftPct - rate * (b.resetMs - now)) };
+}
 async function openDatabase() {
   if (db !== null) return db || null;
-  db = false;
-  try {
-    if (typeof $metrix.caniuse === "function" && (await $metrix.caniuse("sqlite"))) {
-      const conn = await $metrix.sqlite.open("antigravity_quota");
-      await conn.prepare("CREATE TABLE IF NOT EXISTS samples (acct TEXT NOT NULL, bucket TEXT NOT NULL, cycle INTEGER NOT NULL, ts INTEGER NOT NULL, left_pct REAL NOT NULL, PRIMARY KEY (acct, bucket, ts))").run();
-      db = conn;
-    }
-  } catch {}
+  db = false; try { if (typeof $metrix.caniuse === "function" && (await $metrix.caniuse("sqlite"))) { const conn = await $metrix.sqlite.open("antigravity_quota"); await conn.prepare("CREATE TABLE IF NOT EXISTS samples (acct TEXT NOT NULL, bucket TEXT NOT NULL, cycle INTEGER NOT NULL, ts INTEGER NOT NULL, left_pct REAL NOT NULL, PRIMARY KEY (acct, bucket, ts))").run(); db = conn; } } catch {}
   return db || null;
 }
 async function recordSamples(accountKey, buckets) {
@@ -545,14 +495,15 @@ async function recordSamples(accountKey, buckets) {
       const cycle = last && resetCycle && Math.abs(last.cycle - resetCycle) <= CYCLE_SLACK ? last.cycle : resetCycle;
       if (!last || last.cycle !== cycle || Math.abs(last.left_pct - b.leftPct) >= 0.5) await conn.prepare("INSERT OR REPLACE INTO samples (acct, bucket, cycle, ts, left_pct) VALUES (?, ?, ?, ?, ?)").bind(accountKey, b.seriesKey, cycle, now, b.leftPct).run();
       const rows = await conn.prepare("SELECT ts, left_pct FROM samples WHERE acct = ? AND bucket = ? AND cycle = ? ORDER BY ts").bind(accountKey, b.seriesKey, cycle).all();
-      trends[b.seriesKey] = (rows && rows.results) || [];
+      const pastRows = cycle > 0 ? await conn.prepare("SELECT cycle, MIN(left_pct) AS left_pct FROM samples WHERE acct = ? AND bucket = ? AND cycle > 0 AND cycle < ? GROUP BY cycle ORDER BY cycle DESC LIMIT ?").bind(accountKey, b.seriesKey, cycle - CYCLE_SLACK, b.spanMs >= 864e5 ? 5 : 8).all() : { results: [] };
+      trends[b.seriesKey] = { samples: (rows && rows.results) || [], past: ((pastRows && pastRows.results) || []).slice().reverse() };
     }
     await conn.prepare("DELETE FROM samples WHERE ts < ?").bind(now - KEEP_MS).run();
   } catch {}
 }
 
 // -- Worker 状态与低风控单请求刷新管线 --
-let inputs = {}, accounts = [], activeIdx = null, lastConfiguredIdx = null, snapshot = null, error = "", inflight = null, viewMode = "grouped", search = "", selectedId = "", expandedGroups = new Set(), activity;
+let inputs = {}, accounts = [], activeIdx = null, lastConfiguredIdx = null, snapshot = null, error = "", inflight = null, viewMode = "grouped", search = "", selectedId = "", trendKey = "", expandedGroups = new Set(), activity;
 const alertedCycles = {};
 try {
   const sv = localStorage.getItem("antigravity.viewMode"), sr = localStorage.getItem("antigravity.accountIdx");
@@ -560,13 +511,22 @@ try {
   if (sr !== null && sr !== "") { const n = Number(sr); if (Number.isInteger(n) && n >= 0) activeIdx = n; }
 } catch {}
 
+let trayCaps = { probed: false, content: false, icon: false };
+async function probeTrayCaps() { if (trayCaps.probed || typeof $metrix.caniuse !== "function") return; trayCaps.probed = true; try { trayCaps.content = Boolean(await $metrix.caniuse("render.tray.content")); if (trayCaps.content) trayCaps.icon = Boolean(await $metrix.caniuse("render.tray.content.icon")); } catch {} }
 function updateNotchActivity(buckets) {
-  if (activity && activity.expiresAt <= Date.now()) activity = undefined;
-  if (inputs.notchActivity === false || !buckets.length || buckets[0].leftPct > LOW_QUOTA_THRESHOLD) return;
-  const urgent = buckets[0], cycle = finite(urgent.resetMs) ? Math.round(urgent.resetMs / 60e3) : 0;
-  if (alertedCycles[urgent.seriesKey] === cycle) return;
-  alertedCycles[urgent.seriesKey] = cycle;
-  activity = { id: `${urgent.seriesKey}:${cycle}:${clampPct(urgent.leftPct)}`, expiresAt: Date.now() + 8000 };
+  const now = Date.now();
+  if (activity && activity.expiresAt <= now) activity = undefined;
+  if (inputs.notchActivity === false || !buckets.length) return;
+  const thr = effectiveThreshold(), warnPace = inputs.notchForecastAlert !== false;
+  for (const b of buckets) {
+    const low = b.leftPct <= thr, earlyOut = warnPace && trendable(b, now) && Boolean(forecastBucket(b, now).runsOutMs);
+    if (!low && !earlyOut) continue;
+    const cycle = finite(b.resetMs) ? Math.round(b.resetMs / 60e3) : -1;
+    if (alertedCycles[b.seriesKey] !== undefined && Math.abs(alertedCycles[b.seriesKey] - cycle) <= 15) continue;
+    alertedCycles[b.seriesKey] = cycle;
+    activity = { id: `${b.seriesKey}:${cycle}:${low ? "low" : "pace"}:${clampPct(b.leftPct)}`, expiresAt: now + 8000 };
+    return;
+  }
 }
 async function runAssistCheck(origin, token, projectId) {
   const assist = await postCloudCode(origin, "loadCodeAssist", token, { metadata: { ideType: "ANTIGRAVITY" }, ...(projectId ? { cloudaicompanionProject: projectId } : {}) });
@@ -618,7 +578,7 @@ async function fetchAccountSnapshot(account, manual = false) {
         }
         if (!models.length) {
           models = catalog.length ? hydrateCatalog(catalog, groups)
-            : groups.flatMap(g => g.buckets.map(b => ({ id: b.id, displayName: b.title, family: b.family, isPrimary: b.family === "gemini", leftPct: b.leftPct, resetMs: b.resetMs, isUtility: 0, recommended: 0, pickerRank: Infinity, versionScore: 0, tierScore: 0, effortScore: 0 })));
+            : groups.flatMap(g => g.buckets.map(b => ({ id: b.id, displayName: b.title, family: b.family, isPrimary: b.family === "gemini", leftPct: b.leftPct, resetMs: b.resetMs, spanMs: b.spanMs, isUtility: 0, recommended: 0, pickerRank: Infinity, versionScore: 0, tierScore: 0, effortScore: 0 })));
         }
         if (!groups.length && !models.length) throw summaryErr || new Error(T.noModels);
         let email = current.email || (meta && meta.email) || emailCache.get(current.key) || "";
@@ -643,151 +603,190 @@ async function fetchAccountSnapshot(account, manual = false) {
 }
 
 async function load(manual = false) {
-  const parsed = await readAuthAccounts(manual);
-  accounts = parsed.accounts;
+  await probeTrayCaps(); const parsed = await readAuthAccounts(manual); accounts = parsed.accounts;
   const rawIdx = inputs.accountIndex, configuredIdx = rawIdx !== undefined && rawIdx !== null && rawIdx !== "" && Number.isInteger(Number(rawIdx)) ? Number(rawIdx) : null;
   if (configuredIdx !== null && configuredIdx !== lastConfiguredIdx) { lastConfiguredIdx = configuredIdx; if (activeIdx === null || configuredIdx !== 0) activeIdx = configuredIdx; }
   if (activeIdx === null || activeIdx < 0 || activeIdx >= accounts.length) activeIdx = Math.max(0, Math.min(accounts.length - 1, configuredIdx && configuredIdx > 0 ? configuredIdx : parsed.defaultIdx));
   const next = await fetchAccountSnapshot(accounts[activeIdx] || accounts[0], manual);
   snapshot = next; await recordSamples(next.accountKey, next.buckets); updateNotchActivity(next.buckets);
 }
-function refresh(manual = false) {
-  if (inflight) return inflight;
-  inflight = load(manual).then(() => { error = ""; }).catch(e => { error = String((e && e.message) || e); }).finally(() => { inflight = null; $metrix.invalidate(); });
-  $metrix.invalidate(); return inflight;
-}
+function refresh(manual = false) { if (inflight) return inflight; inflight = load(manual).then(() => { error = ""; }).catch(e => { error = String((e && e.message) || e); }).finally(() => { inflight = null; $metrix.invalidate(); }); $metrix.invalidate(); return inflight; }
 const launchRefresh = (manual = false) => { void refresh(manual); };
-async function copyText(str) {
-  try {
-    if (typeof navigator !== "undefined" && navigator.clipboard && typeof ClipboardItem === "function") await navigator.clipboard.write([new ClipboardItem({ "text/plain": new Blob([str], { type: "text/plain" }) })]);
-    if (typeof $metrix.toast === "function") $metrix.toast(fill(T.copied, { text: str }));
-  } catch {}
-}
+async function copyText(str) { try { if (typeof navigator !== "undefined" && navigator.clipboard && typeof ClipboardItem === "function") await navigator.clipboard.write([new ClipboardItem({ "text/plain": new Blob([str], { type: "text/plain" }) })]); if (typeof $metrix.toast === "function") $metrix.toast(fill(T.copied, { text: str })); } catch {} }
 const buildSummaryText = () => (snapshot && snapshot.groups.length ? snapshot.groups.map(g => `${g.title}: ${g.buckets.map(b => `${b.label} ${pctText(b.leftPct)} (${formatCountdown(b.resetMs)})`).join(" / ")}`).join(" | ") : TITLE);
 
-// -- 原生面板组件 --
+// -- 原生面板组件（420px 双焦点圆环仪表 · 方案 A） --
+const pickHeroBuckets = buckets => { if (!buckets || !buckets.length) return []; const lead = buckets[0], second = buckets.find(b => b.family !== lead.family) || buckets[1]; return second ? [lead, second] : [lead]; };
 const IconButton = (name, label, onClick, busy = false) => h("Column", { width: 28, height: 28, center: true, radius: 7, shrink: 0, label, tooltip: label, cursor: "pointer", hover: { background: K.hover }, pressed: { background: K.press }, onClick }, Icon(name, 15, K.muted, busy ? { keyframes: { duration: 900, repeat: -1, ease: "linear", frames: [{ at: 0, rotate: 0 }, { at: 1, rotate: 360 }] } } : null));
-function Header() {
-  const plan = snapshot && snapshot.plan, acct = snapshot && snapshot.accountLabel;
-  return h("Row", { gap: 8, padding: [12, 14, 8, 16], alignItems: "center", fillWidth: true },
-    Icon("mark", 18, "accent"),
-    h("Column", { gap: 1, grow: 1, minWidth: 0 },
-      h("Row", { gap: 6, alignItems: "center", minWidth: 0 }, TX(TITLE, { fontSize: 14, fontWeight: 600, singleLine: true }), plan ? h("Badge", { text: plan, fontSize: 10, fontWeight: 600, textColor: "accentText", background: "accent" }) : null),
-      acct ? TX(acct, { fontSize: 11, textColor: K.muted, singleLine: true }) : null),
-    IconButton("copy", T.copySummary, () => copyText(buildSummaryText())), IconButton("refresh", T.refresh, () => launchRefresh(true), inflight !== null));
+const Header = () => h("Row", { gap: 9, padding: [11, 12, 9, 14], alignItems: "center", fillWidth: true },
+  h("Column", { width: 26, height: 26, center: true, radius: 7, background: "accentSubtle", shrink: 0 }, Icon("mark", 15, "accent")),
+  h("Column", { gap: 1, grow: 1, minWidth: 0 },
+    h("Row", { gap: 6, alignItems: "center", minWidth: 0 }, TX(TITLE, { fontSize: 14, fontWeight: 600, singleLine: true }), snapshot && snapshot.plan ? h("Badge", { text: snapshot.plan, fontSize: 10, fontWeight: 600, textColor: "accentText", background: "accent" }) : null),
+    snapshot && snapshot.accountLabel ? TX(snapshot.accountLabel, { fontSize: 11, textColor: K.muted, singleLine: true }) : null),
+  IconButton("copy", T.copySummary, () => copyText(buildSummaryText())), IconButton("refresh", T.refresh, () => launchRefresh(true), inflight !== null));
+function HeroDualRings(hero, activeKey) {
+  return h("Grid", { key: "hero-rings", columns: hero.length > 1 ? 2 : 1, gap: 8, fillWidth: true }, hero.map(b => {
+    const isActive = b.key === activeKey, tone = quotaTone(b.leftPct), pace = bucketPace(b), fc = forecastBucket(b), d = pace ? Math.round(pace.paceDelta) : null;
+    const pill = fc.runsOutMs ? TX(fill(T.runsOut, { time: formatCountdown(fc.runsOutMs) }), { fontSize: 10, fontWeight: 600, fontFeatures: "tnum", textColor: b.leftPct <= 10 ? "danger" : "warning", background: K.hover, radius: 99, padding: [2, 7], singleLine: true })
+      : b.leftPct <= 0 ? TX(T.exhausted, { fontSize: 10, fontWeight: 600, textColor: "danger", background: K.hover, radius: 99, padding: [2, 7], singleLine: true })
+      : finite(d) ? TX(d >= 0 ? fill(T.aheadPace, { n: d }) : fill(T.behindPace, { n: d }), { fontSize: 10, fontWeight: 500, fontFeatures: "tnum", textColor: d <= -20 ? "warning" : K.muted, singleLine: true }) : null;
+    return h("Column", { key: `ring-${b.key}`, gap: 3, padding: [8, 8], radius: 10, alignItems: "center", minWidth: 0, fillWidth: true, cursor: "pointer", ...(isActive ? { background: "surface", border: [1, "border"] } : {}), hover: { background: K.hover }, onClick: () => { trendKey = b.key; $metrix.invalidate(); } },
+      h("Box", { width: RING, height: RING },
+        h("Chart", { type: "pie", width: RING, height: RING, innerRadius: 0.8, padAngle: 0, hover: false, legend: false, appear: false, label: b.title, data: [{ value: Math.max(b.leftPct, 0.001), color: tone }, { value: Math.max(100 - b.leftPct, 0.001), color: "#80808038" }] }),
+        h("Column", { absolute: true, top: 0, left: 0, width: RING, height: RING, center: true, gap: 0 },
+          TX(pctText(b.leftPct), { fontSize: 19, fontWeight: 650, fontFeatures: "tnum", letterSpacing: -0.4, contentTransition: { numeric: true } }),
+          TX(b.label, { fontSize: 10, textColor: K.muted, singleLine: true }))),
+      TX(shortGroupName(b.groupTitle), { fontSize: 12, fontWeight: 600, singleLine: true }),
+      h("Row", { gap: 4, alignItems: "center", tooltip: formatResetStamp(b.resetMs) }, Icon("clock", 10, K.muted), TX(`${formatCountdown(b.resetMs)} · ${formatShortReset(b.resetMs)}`, { fontSize: 10.5, textColor: K.muted, fontFeatures: "tnum", singleLine: true })),
+      pill);
+  }));
 }
-function SummaryStrip(models, buckets) {
-  const lowest = buckets[0], soonest = [...buckets, ...models].filter(m => finite(m.resetMs)).sort((a, b) => a.resetMs - b.resetMs)[0];
-  const tile = (label, value, color = "text") => h("Column", { gap: 2, padding: [8, 10], radius: 8, background: K.hover, minWidth: 0 }, TX(label, { fontSize: 11, textColor: K.muted, singleLine: true }), TX(value, { fontSize: 16, fontWeight: 650, textColor: color, fontFeatures: "tnum", singleLine: true }));
-  return h("Grid", { columns: 3, gap: 8, fillWidth: true }, tile(T.lowestQuota, lowest ? pctText(lowest.leftPct) : "—", lowest ? quotaTone(lowest.leftPct) : K.muted), tile(T.activeModels, String(models.length)), tile(T.nextReset, soonest ? formatCountdown(soonest.resetMs) : "—"));
+function PaceBar(b, height = 6) {
+  const pace = bucketPace(b), r = height / 2;
+  return h("Box", { height, radius: r, background: K.track, fillWidth: true }, h("Box", { absolute: true, top: 0, left: 0, height, radius: r, widthPercent: Math.max(clampPct(b.leftPct), 1.5), background: quotaTone(b.leftPct) }), pace && finite(pace.paceLeftPct) ? h("Box", { absolute: true, top: -2, height: height + 4, width: 2, radius: 1, leftPercent: Math.max(1, Math.min(99, Math.round(pace.paceLeftPct))), background: "text", opacity: 0.5, tooltip: fill(T.elapsed, { n: Math.round(pace.elapsedPct) }) }) : null);
 }
-const QuotaBar = leftPct => { const pct = Math.max(0, Math.min(100, leftPct)); return h("Box", { height: 6, radius: 3, background: K.track, fillWidth: true }, pct > 0 ? h("Box", { absolute: true, top: 0, left: 0, height: 6, radius: 3, widthPercent: Math.max(pct, 2), background: quotaTone(leftPct) }) : null); };
-function ModelCard(m) {
-  const active = selectedId === m.id, tone = quotaTone(m.leftPct);
-  return h("Column", { key: `card-${m.id}`, gap: 8, padding: [11, 12], radius: 10, background: "surface", border: [1, active ? "accent" : "border"], minWidth: 0, fillWidth: true, cursor: "pointer", hover: { background: K.hover }, onClick: () => { selectedId = m.id; void copyText(m.id); $metrix.invalidate(); } },
-    h("Row", { gap: 6, alignItems: "center", fillWidth: true, minWidth: 0 }, Icon(m.isPrimary ? "sparkle" : "bot", 14, active ? "accent" : "textMuted"), TX(m.displayName, { fontSize: 13, fontWeight: 600, textColor: active ? "accent" : "text", singleLine: true, grow: 1, shrink: 1, minWidth: 0 }), TX(pctText(m.leftPct), { fontSize: 11, fontWeight: 650, fontFeatures: "tnum", textColor: tone, background: K.hover, radius: 5, padding: [2, 6], shrink: 0 })),
-    h("Row", { fillWidth: true, minWidth: 0 }, TX(m.id, { fontSize: 11, font: "monospace", textColor: "accent", background: "accentSubtle", radius: 4, padding: [2, 6], singleLine: true, shrink: 1, minWidth: 0 })),
-    QuotaBar(m.leftPct),
-    h("Row", { gap: 5, alignItems: "center", fillWidth: true, minWidth: 0 }, Icon("clock", 11, K.muted), TX(formatResetStamp(m.resetMs), { fontSize: 10, textColor: K.muted, fontFeatures: "tnum", singleLine: true, shrink: 1, minWidth: 0 }), h("Spacer"), TX(formatCountdown(m.resetMs), { fontSize: 11, fontWeight: 500, textColor: K.muted, fontFeatures: "tnum", shrink: 0 })));
-}
-const BucketCard = b => h("Column", { key: `b-${b.key}`, gap: 7, padding: [10, 11], radius: 9, background: K.hover, border: [1, "border"], fillWidth: true, minWidth: 0 },
-  h("Row", { gap: 6, alignItems: "center", fillWidth: true, minWidth: 0 }, TX(b.label, { fontSize: 12, fontWeight: 700, singleLine: true, grow: 1, shrink: 1, minWidth: 0 }), TX(pctText(b.leftPct), { fontSize: 11, fontWeight: 650, fontFeatures: "tnum", textColor: quotaTone(b.leftPct), background: "surface", radius: 5, padding: [2, 6], shrink: 0 })),
-  QuotaBar(b.leftPct),
-  h("Row", { gap: 4, alignItems: "center", fillWidth: true, minWidth: 0 }, Icon("clock", 11, K.muted), TX(formatResetStamp(b.resetMs), { fontSize: 10, textColor: K.muted, fontFeatures: "tnum", singleLine: true, shrink: 1, minWidth: 0 }), h("Spacer"), TX(formatCountdown(b.resetMs), { fontSize: 11, fontWeight: 600, textColor: "text", fontFeatures: "tnum", shrink: 0 })));
-
-function GroupCard(g, gridCols, forceExpand) {
+function GroupSection(g, activeKey, forceExpand) {
   const expanded = forceExpand || expandedGroups.has(g.key), models = g.models || [], uniqueNames = [];
   for (const m of models) { const base = m.displayName.replace(/\s*\([^)]*\)\s*$/, "").trim(); if (base && !uniqueNames.includes(base)) { uniqueNames.push(base); if (uniqueNames.length === 3) break; } }
-  const preview = uniqueNames.join(", "), cols = g.buckets.length > 1 && gridCols > 1 ? 2 : 1;
-  return h("Column", { key: `grp-${g.key}`, gap: 10, padding: [12, 13], radius: 11, background: "surface", border: [1, "border"], fillWidth: true, minWidth: 0 },
-    h("Row", { gap: 8, alignItems: "center", fillWidth: true, minWidth: 0 }, Icon(g.family === "gemini" ? "sparkle" : "bot", 15, "accent"), TX(g.title, { fontSize: 13, fontWeight: 650, singleLine: true, shrink: 0 }), preview ? TX(`${preview}${models.length > uniqueNames.length ? " …" : ""}`, { fontSize: 11, textColor: K.muted, singleLine: true, grow: 1, shrink: 1, minWidth: 0, textAlign: "end" }) : h("Spacer")),
-    h("Grid", { columns: cols, gap: 8, fillWidth: true }, g.buckets.map(BucketCard)),
-    models.length && expanded ? h("Row", { gap: 5, wrap: true, fillWidth: true }, models.map(m => h("Row", { key: `chip-${m.id}`, padding: [2, 6], radius: 4, background: selectedId === m.id ? "accent" : "accentSubtle", cursor: "pointer", tooltip: `${m.displayName} (${m.id})`, onClick: () => { selectedId = m.id; void copyText(m.id); $metrix.invalidate(); } }, TX(m.id, { fontSize: 10, font: "monospace", textColor: selectedId === m.id ? "accentText" : "accent", singleLine: true })))) : null,
-    models.length && !forceExpand ? h("Row", { gap: 4, alignItems: "center", cursor: "pointer", onClick: () => { if (expanded) expandedGroups.delete(g.key); else expandedGroups.add(g.key); $metrix.invalidate(); } }, Icon(expanded ? "chevronDown" : "chevronRight", 12, K.muted), TX(expanded ? T.collapse : fill(T.showAll, { n: models.length }), { fontSize: 11, textColor: K.muted })) : null);
+  const preview = uniqueNames.join(", ");
+  return h("Column", { key: `grp-${g.key}`, gap: 5, fillWidth: true, minWidth: 0 },
+    h("Row", { gap: 7, alignItems: "center", fillWidth: true, minWidth: 0 }, Icon(g.family === "gemini" ? "sparkle" : "bot", 14, "accent"), TX(g.title, { fontSize: 13, fontWeight: 650, singleLine: true, shrink: 0 }), preview ? TX(`${preview}${models.length > uniqueNames.length ? " …" : ""}`, { fontSize: 11, textColor: K.muted, singleLine: true, grow: 1, shrink: 1, minWidth: 0, textAlign: "end" }) : h("Spacer")),
+    h("Column", { gap: 3, fillWidth: true }, g.buckets.map(b => {
+      const isActive = b.key === activeKey, pace = bucketPace(b), fast = (pace && pace.paceDelta <= -20) || b.leftPct <= 0;
+      return h("Column", { key: `b-${b.key}`, gap: 4, padding: [4, 7], radius: 8, fillWidth: true, minWidth: 0, cursor: "pointer", ...(isActive ? { background: "surface", border: [1, "border"] } : {}), hover: { background: K.hover }, onClick: () => { trendKey = b.key; $metrix.invalidate(); } },
+        h("Row", { gap: 6, alignItems: "center", fillWidth: true, minWidth: 0 },
+          TX(b.label, { fontSize: 11.5, fontWeight: 650, textColor: isActive ? "accent" : "text", singleLine: true, shrink: 0 }),
+          fast ? TX(b.leftPct <= 0 ? T.exhausted : T.fastBurn, { fontSize: 9.5, fontWeight: 600, textColor: b.leftPct <= 0 ? "danger" : "warning", background: K.hover, radius: 4, padding: [1, 5], shrink: 0 }) : null,
+          h("Spacer"), Icon("clock", 10, K.muted),
+          TX(`${formatShortReset(b.resetMs)} · ${formatCountdown(b.resetMs)}`, { fontSize: 10.5, textColor: K.muted, fontFeatures: "tnum", singleLine: true, shrink: 1, minWidth: 0, tooltip: formatResetStamp(b.resetMs) }),
+          TX(pctText(b.leftPct), { fontSize: 12, fontWeight: 650, fontFeatures: "tnum", textColor: quotaTone(b.leftPct), shrink: 0 })),
+        PaceBar(b));
+    })),
+    models.length && expanded ? h("Row", { gap: 5, wrap: true, fillWidth: true }, models.map(m => h("Row", { key: `chip-${m.id}`, padding: [2, 7], radius: 5, background: selectedId === m.id ? "accent" : "accentSubtle", cursor: "pointer", tooltip: `${m.displayName} (${m.id})`, onClick: () => { selectedId = m.id; void copyText(m.id); $metrix.invalidate(); } }, TX(shortModelLabel(m), { fontSize: 10.5, fontWeight: 500, textColor: selectedId === m.id ? "accentText" : "accent", singleLine: true })))) : null,
+    models.length && !forceExpand ? h("Row", { key: `toggle-${g.key}`, gap: 4, alignItems: "center", cursor: "pointer", onClick: () => { if (expanded) expandedGroups.delete(g.key); else expandedGroups.add(g.key); $metrix.invalidate(); } }, Icon(expanded ? "chevronDown" : "chevronRight", 11, K.muted), TX(expanded ? T.collapse : fill(T.showAll, { n: models.length }), { fontSize: 11, textColor: K.muted })) : null);
 }
-function TrendSection(buckets) {
-  const lead = buckets[0], samples = lead ? (trends[lead.seriesKey] || []) : [];
-  if (!lead || samples.length < 2) return null;
-  return h("Column", { gap: 6, padding: [10, 12], radius: 10, background: "surface", border: [1, "border"], fillWidth: true },
-    h("Row", { gap: 6, alignItems: "center", fillWidth: true }, TX(`${T.trend} · ${lead.title}`, { fontSize: 11, fontWeight: 600, textColor: K.muted, grow: 1, singleLine: true }), TX(pctText(lead.leftPct), { fontSize: 11, fontWeight: 600, fontFeatures: "tnum", textColor: quotaTone(lead.leftPct) })),
-    h("Chart", { type: "area", height: 76, fillWidth: true, xKind: "time", yDomain: [0, 100], xTicks: 3, yTicks: 3, curve: "linear", legend: false, hover: true, appear: false, strokeWidth: 1.6, series: [{ name: T.remaining, color: quotaTone(lead.leftPct), fill: { from: 0.18, to: 0 }, points: samples.map(s => ({ x: s.ts, y: s.left_pct, valueLabel: pctText(s.left_pct) })) }] }));
+function ModelCard(m) {
+  const active = selectedId === m.id, tone = quotaTone(m.leftPct), tag = m.recommended ? T.tagRec : m.isUtility ? T.tagUtil : "";
+  return h("Column", { key: `card-${m.id}`, gap: 7, padding: [9, 10], radius: 9, background: "surface", border: [1, active ? "accent" : "border"], minWidth: 0, fillWidth: true, cursor: "pointer", hover: { background: K.hover }, onClick: () => { selectedId = m.id; void copyText(m.id); $metrix.invalidate(); } },
+    h("Row", { gap: 5, alignItems: "center", fillWidth: true, minWidth: 0 }, Icon(m.isPrimary ? "sparkle" : "bot", 13, active ? "accent" : K.muted), TX(m.displayName, { fontSize: 12, fontWeight: 600, textColor: active ? "accent" : "text", singleLine: true, grow: 1, shrink: 1, minWidth: 0 }), TX(pctText(m.leftPct), { fontSize: 11, fontWeight: 650, fontFeatures: "tnum", textColor: tone, shrink: 0 })),
+    h("Row", { gap: 5, alignItems: "center", fillWidth: true, minWidth: 0 }, tag ? TX(tag, { fontSize: 9.5, fontWeight: 600, textColor: K.muted, background: K.hover, radius: 4, padding: [1, 5], shrink: 0 }) : null, TX(m.id, { fontSize: 10, font: "monospace", textColor: active ? "accentText" : "accent", background: active ? "accent" : "accentSubtle", radius: 4, padding: [1, 5], singleLine: true, shrink: 1, minWidth: 0 })),
+    PaceBar(m, 5),
+    h("Row", { gap: 4, alignItems: "center", fillWidth: true, minWidth: 0, tooltip: formatResetStamp(m.resetMs) }, Icon("clock", 10, K.muted), TX(formatShortReset(m.resetMs), { fontSize: 10, textColor: K.muted, fontFeatures: "tnum", singleLine: true, shrink: 1, minWidth: 0 }), h("Spacer"), TX(formatCountdown(m.resetMs), { fontSize: 10.5, fontWeight: 500, textColor: K.muted, fontFeatures: "tnum", shrink: 0 })));
 }
-const Skeleton = () => h("Column", { gap: 12, padding: [12, 16, 16, 16], fillWidth: true }, h("Grid", { columns: 3, gap: 8, fillWidth: true }, [0, 1, 2].map(i => h("Box", { key: `sk-t-${i}`, width: "100%", height: 50, radius: 8, background: K.hover, shrink: 0 }))), [0, 1, 2].map(i => h("Box", { key: `sk-c-${i}`, width: "100%", height: 96, radius: 8, background: K.hover, shrink: 0 })));
+function TrendChart(b, height, legend) {
+  const now = Date.now(), samples = bucketSamples(b);
+  if (!trendable(b, now)) return h("Chart", { type: "line", height, fillWidth: true, xKind: "time", yDomain: [0, 100], xTicks: 3, yTicks: 3, curve: "linear", legend, hover: true, appear: false, label: b.title, series: [{ name: T.remaining, color: quotaTone(b.leftPct), fill: { from: 0.2, to: 0 }, points: samples.map(s => ({ x: s.ts, y: s.left_pct, valueLabel: pctText(s.left_pct) })) }] });
+  const start = b.resetMs - b.spanMs, fc = forecastBucket(b, now), pt = (ts, y) => ({ x: ts, y: Math.max(0, Math.min(100, y)), valueLabel: pctText(y) });
+  const leftPts = [pt(start, 100), ...samples.filter(s => s.ts > start && s.ts < now).map(s => pt(s.ts, s.left_pct)), pt(now, b.leftPct)];
+  const series = [{ name: T.remaining, color: quotaTone(b.leftPct), fill: { from: 0.2, to: 0 }, points: leftPts }, { name: T.pace, color: K.muted, points: [pt(start, 100), pt(b.resetMs, 0)] }];
+  if (!fc.empty && fc.rate > 0 && b.leftPct > 0) series.push({ name: T.forecast, color: fc.runsOutMs ? "warning" : "success", dashed: true, points: [pt(now, b.leftPct), pt(fc.runsOutMs ?? b.resetMs, fc.runsOutMs ? 0 : fc.leftAtReset)] });
+  return h("Chart", { type: "line", height, fillWidth: true, xKind: "time", xDomain: [start, b.resetMs], yDomain: [0, 100], xTicks: 4, yTicks: 3, curve: "linear", legend, hover: true, appear: false, label: b.title, series });
+}
+function PastCyclesChart(b) {
+  const past = bucketPast(b);
+  if (!past.length) return null;
+  return h("Column", { gap: 5, fillWidth: true }, h("Row", { alignItems: "center", fillWidth: true }, TX(T.pastCycles, { fontSize: 10.5, textColor: K.muted }), h("Spacer"), TX(fill(T.pastCount, { n: past.length }), { fontSize: 10, textColor: K.muted, fontFeatures: "tnum" })), h("Chart", { type: "bar", height: 58, fillWidth: true, xKind: "category", labels: past.map(p => (b.spanMs >= 864e5 ? dateOf(new Date(p.cycle)) : hhmm(new Date(p.cycle)))), yDomain: [0, 100], yTicks: 2, appear: false, label: T.pastCycles, series: [{ name: T.remaining, color: "accent", points: past.map((p, i) => ({ x: i, y: p.left_pct, valueLabel: pctText(p.left_pct) })) }] }));
+}
+function TrendSection(buckets, active) {
+  const list = buckets.filter(b => trendable(b) || bucketSamples(b).length >= 2);
+  if (!list.length) return null;
+  const cur = (active && list.find(b => b.key === active.key)) || list[0], pace = bucketPace(cur), fc = forecastBucket(cur);
+  const status = [pace ? fill(T.elapsed, { n: Math.round(pace.elapsedPct) }) : "", fc.runsOutMs ? fill(T.runsOut, { time: formatCountdown(fc.runsOutMs) }) : cur.leftPct <= 0 ? T.exhausted : pace ? (pace.paceDelta >= 0 ? fill(T.aheadPace, { n: Math.round(pace.paceDelta) }) : fill(T.behindPace, { n: Math.round(pace.paceDelta) })) : ""].filter(Boolean).join(" · ");
+  return h("Column", { key: "trend-section", gap: 6, fillWidth: true },
+    h("Divider"),
+    h("Row", { gap: 8, alignItems: "center", fillWidth: true },
+      TX(T.trendTitle, { fontSize: 12, fontWeight: 650, singleLine: true, shrink: 0 }), h("Spacer"),
+      list.length > 1 ? h("Segmented", { key: "trend-bucket", value: cur.key, items: list.map(b => ({ label: shortBucketChip(b), value: b.key })), onChange: v => { trendKey = String(v); $metrix.invalidate(); } }) : null),
+    h("Row", { gap: 6, alignItems: "center", fillWidth: true, minWidth: 0 },
+      TX(pctText(cur.leftPct), { fontSize: 11.5, fontWeight: 650, fontFeatures: "tnum", textColor: quotaTone(cur.leftPct), shrink: 0 }),
+      TX(status || cur.title, { fontSize: 11, textColor: K.muted, fontFeatures: "tnum", singleLine: true, grow: 1, shrink: 1, minWidth: 0 }),
+      TX(formatCountdown(cur.resetMs), { fontSize: 10.5, textColor: K.muted, fontFeatures: "tnum", shrink: 0 })),
+    TrendChart(cur, 86, true), PastCyclesChart(cur));
+}
+const Skeleton = () => h("Column", { gap: 12, padding: [12, 14, 14, 14], fillWidth: true },
+  h("Grid", { columns: 2, gap: 10, fillWidth: true }, [0, 1].map(i => h("Column", { key: `sk-r-${i}`, alignItems: "center", gap: 8 }, h("Box", { width: RING, height: RING, radius: RING / 2, background: K.hover }), h("Box", { width: 72, height: 10, radius: 5, background: K.hover })))),
+  h("Row", { gap: 8, fillWidth: true }, h("Box", { width: 136, height: 28, radius: 8, background: K.hover }), h("Box", { grow: 1, height: 28, radius: 8, background: K.hover })),
+  [0, 1].map(i => h("Column", { key: `sk-b-${i}`, gap: 6, fillWidth: true }, h("Box", { width: 120, height: 11, radius: 4, background: K.hover }), h("Box", { height: 6, radius: 3, background: K.hover, fillWidth: true }))),
+  h("Box", { height: 86, radius: 8, background: K.hover, fillWidth: true }));
 const Problem = detail => h("Column", { grow: 1, center: true, gap: 8, padding: [28, 24] }, Icon("alert", 22, "danger"), TX(T.failed, { fontSize: 14, fontWeight: 600, textAlign: "center" }), TX(detail, { fontSize: 12, textColor: K.muted, textAlign: "center", lineHeight: 1.4, wrap: true }), h("Row", { margin: [6, 0, 0, 0] }, h("Button", { onClick: () => launchRefresh(true) }, T.tryAgain)));
 
 function Body(env) {
   if (!snapshot) return error ? Problem(error) : Skeleton();
-  const q = search.trim().toLowerCase(), gridCols = env && env.viewport && finite(env.viewport.width) && env.viewport.width < 400 ? 1 : 2;
+  const q = search.trim().toLowerCase(), gridCols = env && env.viewport && finite(env.viewport.width) && env.viewport.width < 385 ? 1 : 2;
+  const hero = pickHeroBuckets(snapshot.buckets), active = snapshot.buckets.find(b => b.key === trendKey) || hero[0] || snapshot.buckets[0] || null;
   const filtered = q ? snapshot.models.filter(m => `${m.displayName} ${m.id}`.toLowerCase().includes(q)) : snapshot.models;
   const groups = q ? snapshot.groups.map(g => { const ms = (g.models || []).filter(m => `${m.displayName} ${m.id}`.toLowerCase().includes(q)); return ms.length || `${g.title} ${g.buckets.map(b => b.label).join(" ")}`.toLowerCase().includes(q) ? { ...g, models: ms.length ? ms : g.models } : null; }).filter(Boolean) : snapshot.groups;
-  return h("Column", { gap: 12, padding: [8, 14, 14, 14], fillWidth: true, minWidth: 0 },
+  return h("Column", { gap: 9, padding: [8, 14, 10, 14], fillWidth: true, minWidth: 0 },
     error ? h("Row", { gap: 8, padding: [8, 10], radius: 8, background: K.hover, alignItems: "center", fillWidth: true }, Icon("alert", 14, "danger"), TX(error, { fontSize: 12, grow: 1, shrink: 1, minWidth: 0, wrap: true })) : null,
     accounts.length > 1 ? h("Select", { key: "acct-select", value: String(activeIdx ?? 0), fillWidth: true, items: accounts.map((a, i) => ({ label: a.label, value: String(i) })), onChange: v => { const idx = Number(v); if (Number.isInteger(idx) && idx >= 0 && idx < accounts.length) { activeIdx = idx; try { localStorage.setItem("antigravity.accountIdx", String(idx)); } catch {} launchRefresh(false); } } }) : null,
-    SummaryStrip(snapshot.models, snapshot.buckets),
+    hero.length ? HeroDualRings(hero, active ? active.key : "") : null,
     h("Row", { gap: 8, alignItems: "center", fillWidth: true },
-      h("SearchField", { key: "model-search", value: search, placeholder: T.searchPlaceholder, grow: 1, onChange: v => { search = String(v); $metrix.invalidate(); } }),
-      h("Segmented", { key: "view-mode", value: viewMode, items: [{ label: T.viewGrouped, value: "grouped" }, { label: T.viewGrid, value: "grid" }], onChange: v => { viewMode = v === "grid" ? "grid" : "grouped"; try { localStorage.setItem("antigravity.viewMode", viewMode); } catch {} if (viewMode === "grid" && snapshot && !snapshot.modelsLive && !inflight) launchRefresh(false); else $metrix.invalidate(); } })),
+      h("Segmented", { key: "view-mode", value: viewMode, items: [{ label: T.viewGrouped, value: "grouped" }, { label: `${T.viewGrid} · ${snapshot.models.length}`, value: "grid" }], onChange: v => { viewMode = v === "grid" ? "grid" : "grouped"; try { localStorage.setItem("antigravity.viewMode", viewMode); } catch {} if (viewMode === "grid" && snapshot && !snapshot.modelsLive && !inflight) launchRefresh(false); else $metrix.invalidate(); } }),
+      h("SearchField", { key: "model-search", value: search, placeholder: T.searchPlaceholder, grow: 1, onChange: v => { search = String(v); $metrix.invalidate(); } })),
     !snapshot.models.length && !snapshot.groups.length ? h("Column", { padding: [20, 12], center: true }, TX(T.noModels, { fontSize: 12, textColor: K.muted, textAlign: "center", wrap: true }))
-      : viewMode === "grid" ? (!filtered.length ? h("Column", { padding: [20, 12], center: true }, TX(T.noMatch, { fontSize: 12, textColor: K.muted, textAlign: "center" })) : h("Grid", { columns: gridCols, gap: 10, fillWidth: true }, filtered.map(ModelCard)))
-      : (!groups.length ? h("Column", { padding: [20, 12], center: true }, TX(T.noMatch, { fontSize: 12, textColor: K.muted, textAlign: "center" })) : h("Column", { gap: 10, fillWidth: true }, groups.map(g => GroupCard(g, gridCols, Boolean(q))))),
-    !q ? TrendSection(snapshot.buckets) : null);
+      : viewMode === "grid" ? (!filtered.length ? h("Column", { padding: [20, 12], center: true }, TX(T.noMatch, { fontSize: 12, textColor: K.muted, textAlign: "center" })) : h("Grid", { columns: gridCols, gap: 8, fillWidth: true }, filtered.map(ModelCard)))
+      : (!groups.length ? h("Column", { padding: [20, 12], center: true }, TX(T.noMatch, { fontSize: 12, textColor: K.muted, textAlign: "center" })) : h("Column", { gap: 7, fillWidth: true }, groups.flatMap((g, i) => (i > 0 ? [h("Divider"), GroupSection(g, active ? active.key : "", Boolean(q))] : [GroupSection(g, active ? active.key : "", Boolean(q))])))),
+    !q ? TrendSection(snapshot.buckets, active) : null);
 }
-function Footer() {
-  const ageText = snapshot && snapshot.fetchedAt ? formatUpdated(snapshot.fetchedAt) : error ? T.failed : T.loading;
-  const host = snapshot && snapshot.origin ? snapshot.origin.replace(/^https?:\/\//, "") : "daily-cloudcode-pa.googleapis.com";
-  return h("Row", { gap: 6, padding: [7, 14], alignItems: "center", fillWidth: true }, TX(host, { fontSize: 10, textColor: K.muted, singleLine: true, shrink: 1, minWidth: 0 }), h("Spacer"), TX(ageText, { fontSize: 10, textColor: K.muted, fontFeatures: "tnum", shrink: 0 }));
-}
-const panelTree = env => h("Column", { preferredWidth: 540, preferredHeight: 620, fill: true, minHeight: 0, safeArea: true, fontSize: 13, textColor: "text", shortcuts: { "CmdOrCtrl+R": () => launchRefresh(true) } }, Header(), h("Divider"), h("Scroll", { grow: 1, minHeight: 0, fillWidth: true }, Body(env)), h("Divider"), Footer());
+const Footer = () => h("Row", { gap: 6, padding: [7, 14], alignItems: "center", fillWidth: true }, TX(snapshot && snapshot.origin ? snapshot.origin.replace(/^https?:\/\//, "") : "daily-cloudcode-pa.googleapis.com", { fontSize: 10, textColor: K.muted, singleLine: true, shrink: 1, minWidth: 0 }), h("Spacer"), TX(snapshot && snapshot.fetchedAt ? `${formatUpdated(snapshot.fetchedAt)} · 15m` : error ? T.failed : T.loading, { fontSize: 10, textColor: K.muted, fontFeatures: "tnum", shrink: 0 }));
+const panelTree = env => h("Column", { preferredWidth: 420, fill: true, minHeight: 0, safeArea: true, fontSize: 13, textColor: "text", shortcuts: { "CmdOrCtrl+R": () => launchRefresh(true) } }, Header(), h("Divider"), h("Scroll", { grow: 1, minHeight: 0, fillWidth: true }, Body(env)), h("Divider"), Footer());
 
-// -- 托盘、刘海与桌面小组件 --
+// -- 托盘、刘海与桌面小组件（严格 WidgetComponentProps 子集） --
+function trayContentTree(hero) {
+  if (inputs.richTray !== true || !trayCaps.content || !hero.length) return undefined;
+  const body = hero.length > 1
+    ? { type: "Column", props: { gap: 0, justify: "center", alignItems: "end" }, children: hero.slice(0, 2).map(b => ({ type: "Text", props: { text: `${b.family === "gemini" ? "G" : "C"} ${pctText(b.leftPct)}`, fontSize: 9, fontWeight: b.leftPct <= effectiveThreshold() ? 700 : 600 } })) }
+    : { type: "Text", props: { text: pctText(hero[0].leftPct), fontSize: 12, fontWeight: 600 } };
+  return { type: "Row", props: { width: hero.length > 1 ? (trayCaps.icon ? 68 : 52) : (trayCaps.icon ? 54 : 38), height: 22, gap: 4, paddingX: 2, alignItems: "center", justify: "center" }, children: trayCaps.icon ? [{ type: "Icon", props: { svg: BRAND, fontSize: 13 } }, body] : [body] };
+}
 function trayTree() {
-  const lead = snapshot && snapshot.buckets && snapshot.buckets[0], count = snapshot && snapshot.models ? snapshot.models.length : 0;
-  return {
-    icon: "data:image/svg+xml," + encodeURIComponent(BRAND), iconTemplate: true, title: lead ? pctText(lead.leftPct) : "", error,
-    tooltip: lead ? `${TITLE} · ${pctText(lead.leftPct)} · ${fill(T.modelsCount, { n: count })} · ${formatCountdown(lead.resetMs)}` : TITLE,
-    menu: [{ label: T.refresh, onClick: () => launchRefresh(true) }, { label: T.copySummary, onClick: () => copyText(buildSummaryText()), disabled: !lead }],
-  };
+  const buckets = (snapshot && snapshot.buckets) || [], lead = buckets[0], count = snapshot && snapshot.models ? snapshot.models.length : 0, content = trayContentTree(pickHeroBuckets(buckets));
+  return { icon: "data:image/svg+xml," + encodeURIComponent(BRAND), iconTemplate: true, title: lead ? pctText(lead.leftPct) : "", error, tooltip: lead ? `${TITLE} · ${lead.title} ${pctText(lead.leftPct)} · ${fill(T.modelsCount, { n: count })} · ${formatCountdown(lead.resetMs)}` : TITLE, menu: [{ label: T.refresh, onClick: () => launchRefresh(true) }, { label: T.copySummary, onClick: () => copyText(buildSummaryText()), disabled: !lead }], ...(content ? { content } : {}) };
 }
 function notchExpanded(buckets) {
   if (!snapshot) return h("Column", { padding: [16, 12], fillWidth: true, center: true }, TX(error || T.loading, { fontSize: 12, textColor: K.muted, textAlign: "center", wrap: true }));
   if (!buckets.length) return h("Column", { padding: [16, 12], fillWidth: true, center: true }, TX(T.noModels, { fontSize: 12, textColor: K.muted, textAlign: "center" }));
-  return h("Column", { gap: 10, padding: [10, 12], fillWidth: true }, buckets.slice(0, 4).map(b => h("Column", { key: `n-${b.key}`, gap: 4, fillWidth: true },
-    h("Row", { gap: 8, alignItems: "center", fillWidth: true }, TX(b.title, { fontSize: 12, fontWeight: 500, singleLine: true, grow: 1, shrink: 1, minWidth: 0 }), TX(formatCountdown(b.resetMs), { fontSize: 11, textColor: K.muted, fontFeatures: "tnum", shrink: 0 }), TX(pctText(b.leftPct), { fontSize: 12, fontWeight: 600, fontFeatures: "tnum", textColor: quotaTone(b.leftPct), shrink: 0 })), QuotaBar(b.leftPct))));
+  return h("Column", { gap: 10, padding: [10, 12], fillWidth: true }, buckets.slice(0, 3).map(b => h("Column", { key: `n-${b.key}`, gap: 4, fillWidth: true }, h("Row", { gap: 8, alignItems: "center", fillWidth: true }, TX(b.title, { fontSize: 12, fontWeight: 500, singleLine: true, grow: 1, shrink: 1, minWidth: 0 }), TX(formatCountdown(b.resetMs), { fontSize: 11, textColor: K.muted, fontFeatures: "tnum", shrink: 0 }), TX(pctText(b.leftPct), { fontSize: 12, fontWeight: 600, fontFeatures: "tnum", textColor: quotaTone(b.leftPct), shrink: 0 })), PaceBar(b))), trendable(buckets[0]) ? TrendChart(buckets[0], 84, false) : null);
 }
 function notchTree() {
-  const buckets = (snapshot && snapshot.buckets) || [], lead = buckets[0] || null, tone = lead ? quotaTone(lead.leftPct) : "text";
-  const notchState = typeof $metrix.outputs === "function" ? ($metrix.outputs() || {}).notch : undefined;
+  const buckets = (snapshot && snapshot.buckets) || [], lead = buckets[0] || null, tone = lead ? quotaTone(lead.leftPct) : "text", notchState = typeof $metrix.outputs === "function" ? ($metrix.outputs() || {}).notch : undefined;
   return { compact: { leading: Icon("mark", 16, "text"), trailing: lead ? TX(pctText(lead.leftPct), { fontSize: 12, fontWeight: 650, fontFeatures: "tnum", textColor: tone === "success" ? "text" : tone }) : null }, minimal: Icon("mark", 14, tone === "success" ? "text" : tone), expanded: notchState === "expanded" ? notchExpanded(buckets) : undefined, activity };
 }
 const widgetRing = (b, size) => h("Chart", { type: "pie", width: size, height: size, innerRadius: 0.74, data: [{ value: Math.max(clampPct(b.leftPct), 0.001), color: widgetTone(b.leftPct) }, { value: Math.max(100 - clampPct(b.leftPct), 0.001), color: "#8080803d" }] });
+const widgetPct = (b, size) => TX(pctText(b.leftPct), { fontSize: size, fontWeight: 700, color: widgetTone(b.leftPct), maxLines: 1 });
+const widgetLine = b => { if (!finite(b.resetMs)) return null; const fc = forecastBucket(b); return fc.runsOutMs ? TX(fill(T.runsOut, { time: formatShortReset(fc.runsOutMs) }), { fontSize: 11, fontWeight: 500, color: "warning", maxLines: 1 }) : TX(fill(T.resets, { time: formatShortReset(b.resetMs) }), { fontSize: 11, color: b.leftPct <= 0 ? "error" : "secondary", maxLines: 1 }); };
+const widgetWindow = (b, ring) => h("Column", { gap: 6 }, h("Row", { gap: 10, alignItems: "center" }, widgetRing(b, ring), h("Column", { gap: 1 }, widgetPct(b, 20), TX(b.title, { fontSize: 11, color: "secondary", maxLines: 1 }))), widgetLine(b));
+const widgetGauge = (b, ring) => h("Column", { gap: 3, alignItems: "center" }, widgetRing(b, ring), h("Column", { height: 3 }), widgetPct(b, 22), TX(b.title, { fontSize: 11, fontWeight: 500, color: "secondary", maxLines: 1 }), widgetLine(b));
 const widgetBar = b => h("Column", { gap: 4 }, h("Row", { gap: 6, alignItems: "center" }, TX(b.title, { fontSize: 12, fontWeight: 500, maxLines: 1 }), h("Spacer"), TX(formatCountdown(b.resetMs), { fontSize: 11, color: "secondary", maxLines: 1 }), TX(pctText(b.leftPct), { fontSize: 12, fontWeight: 600, color: widgetTone(b.leftPct), maxLines: 1 })), h("Progress", { value: Math.max(0, Math.min(1, b.leftPct / 100)), color: widgetTone(b.leftPct) }));
+function widgetTrend(b, height) {
+  if (!trendable(b)) return null;
+  const now = Date.now(), start = b.resetMs - b.spanMs, fc = forecastBucket(b, now), steps = 29;
+  const known = [{ ts: start, left_pct: 100 }, ...bucketSamples(b).filter(s => s.ts > start && s.ts < now), { ts: now, left_pct: b.leftPct }];
+  const at = ts => { const i = known.findIndex(s => s.ts >= ts); if (i <= 0) return known[Math.max(0, i)].left_pct; const a = known[i - 1], c = known[i]; return a.left_pct + (c.left_pct - a.left_pct) * (ts - a.ts) / (c.ts - a.ts || 1); };
+  const times = Array.from({ length: steps }, (_, i) => start + b.spanMs * i / (steps - 1)), elapsed = Math.max(1, Math.min(steps - 1, Math.round((now - start) / b.spanMs * (steps - 1))));
+  const left = times.slice(0, elapsed + 1).map((ts, i) => (i === elapsed ? b.leftPct : at(ts)));
+  const series = [{ name: T.pace, color: "secondary", points: times.map(ts => 100 - (ts - start) / b.spanMs * 100) }];
+  if (!fc.empty && fc.rate > 0 && b.leftPct > 0) { const ahead = []; for (const ts of times.slice(elapsed + 1)) { ahead.push(Math.max(0, b.leftPct - fc.rate * (ts - now))); if (ahead[ahead.length - 1] === 0) break; } series.push({ name: T.forecast, color: fc.runsOutMs ? "warning" : "success", points: [...left, ...ahead] }); }
+  series.push({ name: T.remaining, color: widgetTone(b.leftPct), points: left });
+  return h("Chart", { type: "line", ...(height ? { height } : {}), yDomain: [0, 100], strokeWidth: 1.5, series: series.map(x => ({ name: x.name, color: x.color, points: x.points.map((y, i) => ({ x: i, y })) })) });
+}
 function widgetTree(family) {
+  const isWindows = $metrix.platform === "windows";
   const heading = h("Row", { gap: 6, alignItems: "center" }, h("Icon", { svg: BRAND, size: 14, color: "accent" }), TX(TITLE, { fontSize: 13, fontWeight: 600, maxLines: 1 }), h("Spacer"), family !== "small" && snapshot && snapshot.plan ? h("Badge", { text: snapshot.plan }) : null);
   if (!snapshot) return h("Column", { gap: 6 }, heading, h("Spacer"), TX(error ? T.failed : T.loading, { fontSize: 12, color: "secondary", textAlign: "center" }), error ? TX(T.reconnect, { fontSize: 11, color: "secondary", textAlign: "center", maxLines: 2 }) : null, h("Spacer"));
   const buckets = snapshot.buckets || [];
   if (!buckets.length) return h("Column", { gap: 6 }, heading, h("Spacer"), TX(T.noModels, { fontSize: 12, color: "secondary", textAlign: "center" }), h("Spacer"));
-  const lead = buckets[0];
-  if (family === "small") return h("Column", { gap: 6 }, heading, h("Spacer"), h("Row", { gap: 10, alignItems: "center" }, widgetRing(lead, 48), h("Column", { gap: 2 }, TX(pctText(lead.leftPct), { fontSize: 22, fontWeight: 700, color: widgetTone(lead.leftPct), maxLines: 1 }), TX(lead.title, { fontSize: 11, color: "secondary", maxLines: 1 }))), TX(formatCountdown(lead.resetMs), { fontSize: 11, color: "secondary", maxLines: 1 }));
-  return h("Column", { gap: family === "large" ? 10 : 8 }, heading, h("Row", { gap: 12, alignItems: "center" }, widgetRing(lead, family === "large" ? 56 : 44), h("Column", { gap: 2 }, TX(pctText(lead.leftPct), { fontSize: 22, fontWeight: 700, color: widgetTone(lead.leftPct), maxLines: 1 }), TX(`${fill(T.modelsCount, { n: snapshot.models.length })} · ${formatCountdown(lead.resetMs)}`, { fontSize: 11, color: "secondary", maxLines: 1 }))), h("Divider"), h("Column", { gap: 8 }, buckets.slice(0, family === "large" ? 5 : 2).map(widgetBar)));
+  const hero = pickHeroBuckets(buckets), lead = hero[0];
+  if (family === "small") return h("Column", { gap: isWindows ? 4 : 0 }, heading, isWindows ? null : h("Spacer"), widgetWindow(lead, isWindows ? 40 : 50));
+  if (family === "medium") return h("Column", { gap: 8 }, heading, h("Grid", { columns: hero.length, gap: 12, alignItems: "start" }, hero.map(b => widgetWindow(b, isWindows ? 36 : 40))), isWindows ? null : widgetTrend(lead, 44));
+  return h("Column", { gap: 10 }, heading, h("Grid", { columns: hero.length, gap: 12, alignItems: "center" }, hero.map(b => widgetGauge(b, 58))), widgetTrend(lead, 58), h("Divider"), h("Column", { gap: 7 }, buckets.slice(0, 4).map(widgetBar)));
 }
 
 // -- 生命周期导出 --
 export default {
-  async scheduled(env) {
-    inputs = (env && env.inputs) || inputs;
-    const manual = Boolean(env && (env.reason === "manual" || env.reason === "inputs-changed"));
-    if (env && env.reason === "inputs-changed") { cachedAuth = null; keychainTried = false; }
-    await refresh(manual);
-  },
-  render(env) {
-    inputs = (env && env.inputs) || inputs;
-    if (activity && activity.expiresAt <= Date.now()) activity = undefined;
-    return { tray: trayTree(), panel: panelTree(env), notch: notchTree(), widget: { small: widgetTree("small"), medium: widgetTree("medium"), large: widgetTree("large") } };
-  },
-  event(name, payload) {
-    if (name === "refresh") return launchRefresh(true);
-    if (name === "lifecycle" && payload && payload.type === "expand" && !inflight && (!snapshot || Date.now() - snapshot.fetchedAt > EXPAND_STALE_MS)) launchRefresh(false);
-  },
+  async scheduled(env) { inputs = (env && env.inputs) || inputs; const manual = Boolean(env && (env.reason === "manual" || env.reason === "inputs-changed")); if (env && env.reason === "inputs-changed") { cachedAuth = null; keychainTried = false; } await refresh(manual); },
+  render(env) { inputs = (env && env.inputs) || inputs; if (activity && activity.expiresAt <= Date.now()) activity = undefined; return { tray: trayTree(), panel: panelTree(env), notch: notchTree(), widget: { small: widgetTree("small"), medium: widgetTree("medium"), large: widgetTree("large") } }; },
+  event(name, payload) { if (name === "refresh") return launchRefresh(true); if (name === "lifecycle" && payload && payload.type === "start") { void probeTrayCaps().then(() => $metrix.invalidate()); return; } if (name === "lifecycle" && payload && payload.type === "expand" && !inflight && (!snapshot || Date.now() - snapshot.fetchedAt > EXPAND_STALE_MS)) launchRefresh(false); },
 };
   ]]></script>
 </bar>

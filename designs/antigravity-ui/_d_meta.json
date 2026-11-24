@@ -1,0 +1,23 @@
+{
+  "type": "design",
+  "designSystems": [],
+  "primaryDesignSystem": null,
+  "assets": {
+    "Antigravity UI Options": {
+      "versions": [
+        {
+          "path": "Antigravity UI Options.html",
+          "createdAt": "2026-11-24T05:56:17.769Z",
+          "status": "approved",
+          "subtitle": "3 native-translatable macOS flyout variants + Notch & Widgets",
+          "viewport": {
+            "width": 1440,
+            "height": 900
+          }
+        }
+      ]
+    }
+  },
+  "createdAt": "2026-11-24T05:56:17.770Z",
+  "updatedAt": "2026-11-24T06:33:36.686Z"
+}

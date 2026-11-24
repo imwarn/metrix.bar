@@ -1,7 +1,7 @@
 /**
  * [INPUT]: 依赖 node:fs、node:path、node:vm、node:assert/strict 及同目录 antigravity.bar
- * [OUTPUT]: 无导出，直接执行 Antigravity 看板离线契约测试并以进程退出码反馈结果
- * [POS]: dashboards/antigravity 的离线回归验证入口，可从仓库根目录或本目录直接运行
+ * [OUTPUT]: 无导出，直接执行 Antigravity v1.4.0 看板离线契约测试并以进程退出码反馈结果
+ * [POS]: dashboards/antigravity 的离线回归验证入口（21 项离线契约检查），覆盖凭据/轮询契约、双环/PaceBar/A2 胶囊/SQLite 趋势、严格 Widget 子集、richTray 原生双行富托盘（TrayContentRoot）及自定义低额度阈值/预测提前耗尽刘海预警
  * [PROTOCOL]: Update this header on change, then check GEMINI.md
  */
 const fs = require('node:fs');
@@ -32,6 +32,58 @@ const fixtureModels = {
   },
 };
 
+function createMockSqlite(seed = []) {
+  const rows = seed.map(r => ({ ...r }));
+  return {
+    rows,
+    prepare(sql) {
+      const exec = (params = []) => {
+        const s = sql.trim();
+        if (s.startsWith('CREATE TABLE')) return { run: async () => ({}) };
+        if (s.startsWith('INSERT OR REPLACE INTO samples')) {
+          const [acct, bucket, cycle, ts, left_pct] = params;
+          const idx = rows.findIndex(r => r.acct === acct && r.bucket === bucket && r.ts === ts);
+          if (idx >= 0) rows.splice(idx, 1);
+          rows.push({ acct, bucket, cycle, ts, left_pct });
+          return { run: async () => ({}) };
+        }
+        if (s.startsWith('DELETE FROM samples WHERE ts < ?')) {
+          const [cutoff] = params;
+          for (let i = rows.length - 1; i >= 0; i--) if (rows[i].ts < cutoff) rows.splice(i, 1);
+          return { run: async () => ({}) };
+        }
+        if (s.startsWith('SELECT cycle, left_pct FROM samples')) {
+          const [acct, bucket] = params;
+          const hit = rows.filter(r => r.acct === acct && r.bucket === bucket).sort((a, b) => b.ts - a.ts)[0] || null;
+          return { first: async () => (hit ? { cycle: hit.cycle, left_pct: hit.left_pct } : null) };
+        }
+        if (s.startsWith('SELECT ts, left_pct FROM samples')) {
+          const [acct, bucket, cycle] = params;
+          const results = rows.filter(r => r.acct === acct && r.bucket === bucket && r.cycle === cycle).sort((a, b) => a.ts - b.ts).map(r => ({ ts: r.ts, left_pct: r.left_pct }));
+          return { all: async () => ({ results }) };
+        }
+        if (s.startsWith('SELECT cycle, MIN(left_pct) AS left_pct FROM samples')) {
+          const [acct, bucket, maxCycle, limit] = params;
+          const byCycle = new Map();
+          for (const r of rows) {
+            if (r.acct === acct && r.bucket === bucket && r.cycle > 0 && r.cycle < maxCycle) {
+              const prev = byCycle.get(r.cycle);
+              if (prev === undefined || r.left_pct < prev) byCycle.set(r.cycle, r.left_pct);
+            }
+          }
+          const results = [...byCycle.entries()].sort((a, b) => b[0] - a[0]).slice(0, limit).map(([cycle, left_pct]) => ({ cycle, left_pct }));
+          return { all: async () => ({ results }) };
+        }
+        throw new Error(`Unexpected SQL in mock sqlite: ${sql}`);
+      };
+      return {
+        run: () => exec([]).run(),
+        bind: (...params) => exec(params),
+      };
+    },
+  };
+}
+
 function setup(options = {}) {
   const requests = [];
   const copied = [];
@@ -39,6 +91,7 @@ function setup(options = {}) {
   const stats = { keychainCalls: 0, secretCalls: 0, fileCalls: 0 };
   const storage = new Map();
   const secrets = { ...(options.secrets || {}) };
+  const mockDb = options.sqlite ? createMockSqlite(options.sqliteSeed || []) : null;
   const authContent =
     options.authContent !== undefined
       ? options.authContent
@@ -51,19 +104,8 @@ function setup(options = {}) {
         });
 
   const context = vm.createContext({
-    URL,
-    URLSearchParams,
-    Map,
-    Set,
-    Date,
-    JSON,
-    Promise,
-    AbortController,
-    setTimeout,
-    clearTimeout,
-    atob,
-    TextDecoder,
-    Uint8Array,
+    URL, URLSearchParams, Map, Set, Date, JSON, Promise, AbortController,
+    setTimeout, clearTimeout, atob, TextDecoder, Uint8Array,
     Blob: class FakeBlob { constructor(parts) { this.parts = parts; } },
     ClipboardItem: class FakeClipboardItem { constructor(map) { this.map = map; } },
     navigator: {
@@ -80,7 +122,7 @@ function setup(options = {}) {
       setItem: (k, v) => storage.set(k, String(v)),
     },
     $metrix: {
-      platform: 'darwin',
+      platform: options.platform || 'darwin',
       secret: name => {
         stats.secretCalls++;
         return options.asyncSecret ? Promise.resolve(secrets[name] || '') : (secrets[name] || '');
@@ -101,7 +143,8 @@ function setup(options = {}) {
         if (options.keychainValue && service === 'gemini' && account === 'antigravity') return options.keychainValue;
         throw new Error('item could not be found');
       },
-      caniuse: async () => false,
+      caniuse: async cap => (typeof options.caniuse === 'function' ? Boolean(options.caniuse(cap)) : (options.caniuse && Object.prototype.hasOwnProperty.call(options.caniuse, cap) ? Boolean(options.caniuse[cap]) : (cap === 'sqlite' ? Boolean(mockDb) : false))),
+      sqlite: mockDb ? { open: async () => mockDb } : undefined,
       outputs: () => ({ tray: true, panel: true, notch: options.notchState || 'compact', widget: { known: true, families: ['small', 'medium', 'large'] } }),
       invalidate: () => {},
       toast: msg => toasts.push(msg),
@@ -192,6 +235,85 @@ function flatten(node, out = []) {
     for (const c of node.children || []) flatten(c, out);
   }
   return out;
+}
+
+const WIDGET_BASE = ['key', 'padding'];
+const WIDGET_LAYOUT = [...WIDGET_BASE, 'gap', 'width', 'height', 'radius', 'background', 'alignItems'];
+const WIDGET_TEXT_STYLE = [...WIDGET_BASE, 'color', 'textColor', 'bold', 'italic', 'fontSize', 'fontWeight'];
+const WIDGET_ALLOWED_PROPS = {
+  Column: new Set(WIDGET_LAYOUT),
+  Row: new Set(WIDGET_LAYOUT),
+  Box: new Set(WIDGET_LAYOUT),
+  Grid: new Set([...WIDGET_LAYOUT, 'columns']),
+  Text: new Set([...WIDGET_TEXT_STYLE, 'text', 'maxLines', 'textAlign']),
+  RichText: new Set([...WIDGET_TEXT_STYLE, 'spans', 'maxLines', 'textAlign']),
+  Badge: new Set([...WIDGET_TEXT_STYLE, 'text', 'background']),
+  Avatar: new Set([...WIDGET_BASE, 'name', 'src', 'size', 'color', 'textColor', 'background']),
+  Icon: new Set([...WIDGET_BASE, 'svg', 'size', 'color', 'textColor']),
+  Image: new Set([...WIDGET_BASE, 'src', 'width', 'height', 'radius']),
+  Progress: new Set([...WIDGET_BASE, 'value', 'color', 'textColor']),
+  Meter: new Set([...WIDGET_BASE, 'value', 'min', 'max', 'levels', 'color', 'textColor']),
+  Chart: new Set([...WIDGET_BASE, 'type', 'width', 'height', 'series', 'data', 'innerRadius', 'yDomain', 'strokeWidth']),
+  Spacer: new Set(['key']),
+  Divider: new Set(['key', 'orientation']),
+};
+const WIDGET_FORBIDDEN_PROPS = new Set([
+  'absolute', 'fillWidth', 'grow', 'shrink', 'minWidth', 'singleLine', 'fontFeatures',
+  'wrap', 'hover', 'xKind', 'legend', 'appear', 'tooltip', 'onClick',
+]);
+const WIDGET_COLORS = new Set(['primary', 'secondary', 'accent', 'success', 'warning', 'error']);
+const isValidWidgetColor = c => typeof c === 'string' && (WIDGET_COLORS.has(c) || /^#[0-9a-fA-F]{3,8}$/.test(c));
+
+function validateWidgetTree(node, trace = 'widget') {
+  if (node == null || typeof node === 'string' || typeof node === 'number' || typeof node === 'boolean') return;
+  assert.equal(typeof node, 'object', `${trace} must be an object or primitive`);
+  if (!('type' in node) && typeof node.text === 'string') return;
+  const allowed = WIDGET_ALLOWED_PROPS[node.type];
+  assert(allowed, `${trace}: forbidden WidgetComponentType "${node.type}"`);
+  const props = node.props || {};
+  for (const [k, v] of Object.entries(props)) {
+    if (v === undefined) continue;
+    assert(!WIDGET_FORBIDDEN_PROPS.has(k), `${trace}.${node.type}: forbidden panel-only prop "${k}"`);
+    assert(allowed.has(k), `${trace}.${node.type}: disallowed Widget prop "${k}"`);
+    if (k === 'color' || k === 'textColor' || k === 'background') {
+      assert(isValidWidgetColor(v), `${trace}.${node.type}.${k}: invalid WidgetColor "${v}"`);
+    }
+  }
+  if (node.type === 'Chart') {
+    if (props.type !== undefined) assert(['line', 'area', 'bar', 'pie'].includes(props.type), `${trace}.Chart: invalid type "${props.type}"`);
+    for (const d of props.data || []) if (d.color !== undefined) assert(isValidWidgetColor(d.color), `${trace}.Chart.data: invalid color "${d.color}"`);
+    for (const s of props.series || []) if (s.color !== undefined) assert(isValidWidgetColor(s.color), `${trace}.Chart.series: invalid color "${s.color}"`);
+  }
+  for (let i = 0; i < (node.children || []).length; i++) {
+    validateWidgetTree(node.children[i], `${trace}.${node.type}[${i}]`);
+  }
+}
+
+const TRAY_LAYOUT = ['width', 'height', 'gap', 'padding', 'paddingX', 'paddingY', 'alignItems', 'justify'];
+const TRAY_ALLOWED = {
+  Row: new Set(TRAY_LAYOUT), Column: new Set(TRAY_LAYOUT), Spacer: new Set(TRAY_LAYOUT),
+  Text: new Set([...TRAY_LAYOUT, 'text', 'fontSize', 'fontWeight']),
+  Icon: new Set([...TRAY_LAYOUT, 'svg', 'fontSize']),
+  Chart: new Set([...TRAY_LAYOUT, 'type', 'series', 'strokeWidth']),
+};
+function validateTrayContent(node, trace = 'tray.content', isRoot = true) {
+  assert(node && typeof node === 'object', `${trace} must be an object`);
+  const allowed = TRAY_ALLOWED[node.type], props = node.props || {};
+  assert(allowed, `${trace}: disallowed TrayContentNode type "${node.type}"`);
+  if (isRoot) { assert.equal(props.height, 22); assert(Number.isInteger(props.width) && props.width >= 16 && props.width <= 240); }
+  for (const [k, v] of Object.entries(props)) {
+    if (v === undefined) continue;
+    assert(allowed.has(k), `${trace}.${node.type}: disallowed Tray prop "${k}"`);
+    if (k === 'fontWeight') assert(Number.isInteger(v) && v >= 100 && v <= 900 && v % 100 === 0, `${trace}: bad fontWeight ${v}`);
+    if (k === 'alignItems') assert(['start', 'center', 'end', 'stretch'].includes(v), `${trace}: bad alignItems ${v}`);
+    if (k === 'justify') assert(['start', 'center', 'end', 'space-between', 'space-around', 'space-evenly'].includes(v), `${trace}: bad justify ${v}`);
+  }
+  if (node.type === 'Icon') assert(typeof props.svg === 'string' && props.svg.includes('<svg'), `${trace}.Icon requires svg`);
+  for (let i = 0; i < (node.children || []).length; i++) {
+    const ch = node.children[i];
+    if (node.type === 'Text') assert(typeof ch === 'string' || typeof ch === 'number', `${trace}.Text child must be string|number`);
+    else validateTrayContent(ch, `${trace}.${node.type}[${i}]`, false);
+  }
 }
 
 (async () => {
@@ -512,7 +634,161 @@ function flatten(node, out = []) {
   assert(expiredLocal.render().tray.error.includes('登录令牌已过期'));
   assert.equal(expiredLocal.requests.length, 0, 'known-expired token without client_secret must not send doomed /v1internal requests');
 
-  console.log('PASS: v1.3.0 ~/.gemini silent auth, cachedAuth anti-popup, async secret, precise diagnostics, 1-request polling, 24h meta cache, sticky origin, 5H+WEEKLY & newest-first grid');
+  // 14. v1.4.0 layout contract: preferredWidth 420, HeroDualRings replaces old 3-tile SummaryStrip
+  assert(rawXml.includes('version="1.4.0"'), 'bar XML must declare version 1.4.0');
+  const v14 = setup({ notchState: 'expanded' });
+  await v14.run('initial');
+  const v14View = v14.render();
+  assert.equal(v14View.panel.props.preferredWidth, 420, 'panel preferredWidth must be 420');
+  assert.equal(v14View.panel.props.preferredHeight, undefined, 'panel must not lock preferredHeight');
+  const v14PanelJson = JSON.stringify(v14View.panel);
+  assert(!v14PanelJson.includes('有额度模型'), 'old 3-tile vanity SummaryStrip must be removed');
+  const heroGrid = flatten(v14View.panel).find(n => n.props && n.props.key === 'hero-rings');
+  assert(heroGrid && heroGrid.type === 'Grid' && heroGrid.props.columns === 2, 'HeroDualRings must render a 2-column Grid');
+  const heroRings = flatten(heroGrid).filter(n => n.props && String(n.props.key || '').startsWith('ring-'));
+  assert.deepEqual(heroRings.map(r => r.props.key), ['ring-3p-5h', 'ring-gemini-5h']);
+  const heroCharts = flatten(heroGrid).filter(n => n.type === 'Chart' && n.props.type === 'pie');
+  assert.equal(heroCharts.length, 2, 'HeroDualRings must render 2 pie donut Charts');
+  assert(heroCharts.every(c => c.props.innerRadius === 0.8), 'Hero donut rings must use innerRadius 0.8');
+
+  // 15. Hero ring & bucket row clicks switch trendKey and TrendSection active series/title
+  const trendSegBefore = flatten(v14View.panel).find(n => n.type === 'Segmented' && n.props.key === 'trend-bucket');
+  assert(trendSegBefore && trendSegBefore.props.value === '3p-5h', 'default trendKey must follow lead hero bucket');
+  heroRings[1].props.onClick();
+  assert.equal(v14.call('trendKey'), 'gemini-5h', 'clicking 2nd hero ring must update trendKey');
+  const v14AfterRing = v14.render();
+  const trendSecAfterRing = flatten(v14AfterRing.panel).find(n => n.props && n.props.key === 'trend-section');
+  const trendSegAfterRing = flatten(trendSecAfterRing).find(n => n.type === 'Segmented' && n.props.key === 'trend-bucket');
+  const trendChartAfterRing = flatten(trendSecAfterRing).find(n => n.type === 'Chart' && n.props.type === 'line');
+  assert.equal(trendSegAfterRing.props.value, 'gemini-5h');
+  assert(trendChartAfterRing && trendChartAfterRing.props.label.includes('Gemini') && trendChartAfterRing.props.label.includes('5H'));
+  const weeklyRow = flatten(v14AfterRing.panel).find(n => n.props && n.props.key === 'b-gemini-weekly');
+  assert(weeklyRow && typeof weeklyRow.props.onClick === 'function');
+  weeklyRow.props.onClick();
+  assert.equal(v14.call('trendKey'), 'gemini-weekly', 'clicking a bucket row must update trendKey');
+  const v14AfterRow = v14.render();
+  const trendSecAfterRow = flatten(v14AfterRow.panel).find(n => n.props && n.props.key === 'trend-section');
+  const trendSegAfterRow = flatten(trendSecAfterRow).find(n => n.props && n.props.key === 'trend-bucket');
+  assert.equal(trendSegAfterRow.props.value, 'gemini-weekly');
+  assert(flatten(trendSecAfterRow).find(n => n.type === 'Chart' && n.props.type === 'line').props.label.includes('WEEKLY'));
+  trendSegAfterRow.props.onChange('3p-weekly');
+  assert.equal(v14.call('trendKey'), '3p-weekly', 'changing trend-bucket Segmented must update trendKey');
+
+  // 16. PaceBar renders Even-Pace tick mark (width: 2, height: 10, leftPercent) on timed buckets & expanded notch
+  const panelTicks = flatten(v14View.panel).filter(
+    n => n.type === 'Box' && n.props.absolute === true && n.props.width === 2 && n.props.height === 10 && typeof n.props.leftPercent === 'number'
+  );
+  assert.equal(panelTicks.length, 4, 'all 4 timed buckets in grouped view must render an Even-Pace tick mark');
+  assert(panelTicks.every(t => t.props.leftPercent >= 1 && t.props.leftPercent <= 99));
+  const notchTicks = flatten(v14View.notch.expanded).filter(
+    n => n.type === 'Box' && n.props.absolute === true && n.props.width === 2 && n.props.height === 10 && typeof n.props.leftPercent === 'number'
+  );
+  assert(notchTicks.length >= 2, 'expanded notch must render PaceBar Even-Pace ticks');
+
+  // 17. Group drawer expansion renders A2 short readable model chips while clicking copies full model ID
+  const geminiToggle = flatten(v14View.panel).find(n => n.props && n.props.key === 'toggle-sum-0-gemini');
+  const claudeToggle = flatten(v14View.panel).find(n => n.props && n.props.key === 'toggle-sum-1-claude');
+  assert(geminiToggle && claudeToggle, 'grouped view must render drawer toggles');
+  geminiToggle.props.onClick();
+  claudeToggle.props.onClick();
+  const v14Expanded = v14.render();
+  const argonChip = flatten(v14Expanded.panel).find(n => n.props && n.props.key === 'chip-gemini-4-argon-high');
+  const carbonChip = flatten(v14Expanded.panel).find(n => n.props && n.props.key === 'chip-gemini-4-carbon-high');
+  const opusChip = flatten(v14Expanded.panel).find(n => n.props && n.props.key === 'chip-claude-opus-5-5-high');
+  assert(argonChip && carbonChip && opusChip, 'expanded drawers must render model chips');
+  const chipText = chip => flatten(chip).filter(n => n.type === 'Text').flatMap(n => n.children || []).join('');
+  assert.equal(chipText(argonChip), 'Argon High');
+  assert.equal(chipText(carbonChip), 'Carbon High');
+  assert.equal(chipText(opusChip), 'Opus 5.5 High');
+  assert(!chipText(argonChip).includes('gemini-4-argon-high'), 'chip text must be concise human label, not raw ID');
+  assert(argonChip.props.tooltip.includes('gemini-4-argon-high'), 'chip tooltip must include full model ID');
+  argonChip.props.onClick();
+  await new Promise(r => setTimeout(r, 10));
+  assert.equal(v14.copied[0], 'gemini-4-argon-high', 'clicking A2 chip must still copy full model ID');
+
+  // 18. SQLite disabled vs enabled: TrendChart works without SQLite; mock SQLite populates trends & PastCyclesChart
+  const noDbTrendSec = flatten(v14View.panel).find(n => n.props && n.props.key === 'trend-section');
+  const noDbLine = flatten(noDbTrendSec).find(n => n.type === 'Chart' && n.props.type === 'line');
+  assert(noDbLine && noDbLine.props.series.length >= 2, 'TrendChart must render remaining + pace even without SQLite');
+  assert(noDbLine.props.series.some(sr => sr.dashed === true), 'TrendChart must render dashed forecast without SQLite');
+  assert(!flatten(noDbTrendSec).some(n => n.type === 'Chart' && n.props.type === 'bar'), 'no PastCyclesChart without SQLite history');
+
+  const shortCycleMs = Math.round(Date.parse(shortIso));
+  const fiveH = 5 * 3600e3;
+  const withDb = setup({
+    sqlite: true,
+    sqliteSeed: [
+      { acct: 'dev@example.invalid', bucket: 'bucket:3p-5h', cycle: shortCycleMs - 2 * fiveH, ts: shortCycleMs - 2 * fiveH - 600e3, left_pct: 35 },
+      { acct: 'dev@example.invalid', bucket: 'bucket:3p-5h', cycle: shortCycleMs - fiveH, ts: shortCycleMs - fiveH - 600e3, left_pct: 12 },
+      { acct: 'dev@example.invalid', bucket: 'bucket:3p-5h', cycle: shortCycleMs, ts: Date.now() - 45 * 60e3, left_pct: 68 },
+    ],
+  });
+  await withDb.run('initial');
+  const dbTrends = withDb.call('trends["bucket:3p-5h"]');
+  assert(dbTrends && dbTrends.samples.length >= 2, 'SQLite must persist and reload current-cycle samples');
+  assert.deepEqual(Array.from(dbTrends.past.map(p => p.left_pct)), [35, 12], 'past cycles must be ordered oldest-first');
+  const dbView = withDb.render();
+  const dbTrendSec = flatten(dbView.panel).find(n => n.props && n.props.key === 'trend-section');
+  const dbLine = flatten(dbTrendSec).find(n => n.type === 'Chart' && n.props.type === 'line');
+  const dbBar = flatten(dbTrendSec).find(n => n.type === 'Chart' && n.props.type === 'bar');
+  assert(dbLine && dbLine.props.series.length === 3, 'SQLite TrendChart must include remaining, pace, and forecast series');
+  assert(dbBar && dbBar.props.series[0].points.length === 2, 'PastCyclesChart must render bar chart for past cycles');
+  assert.deepEqual(dbBar.props.series[0].points.map(p => p.y), [35, 12]);
+
+  // 19. Strict Widget Subset Validator across loaded, SQLite, loading, error, and Windows states
+  const loadingState = setup();
+  const winState = setup({ platform: 'windows' });
+  await winState.run('initial');
+  for (const [label, widgetObj] of [
+    ['loaded-darwin', v14View.widget],
+    ['loaded-sqlite', dbView.widget],
+    ['loading', loadingState.render().widget],
+    ['error', kcMissing.render().widget],
+    ['loaded-windows', winState.render().widget],
+  ]) {
+    for (const family of ['small', 'medium', 'large']) {
+      assert(widgetObj && widgetObj[family], `${label}.widget.${family} must exist`);
+      validateWidgetTree(widgetObj[family], `${label}.${family}`);
+    }
+  }
+
+  // 20. On-demand richTray (tray.content) & strict TrayContentRoot validator
+  assert.equal(v14View.tray.content, undefined, 'tray.content must be undefined when richTray is off');
+  const richOff = setup({ caniuse: { 'render.tray.content': true, 'render.tray.content.icon': true } });
+  await richOff.run('initial');
+  assert.equal(richOff.render().tray.content, undefined, 'richTray default false must keep tray.content undefined');
+  const richOn = setup({ inputs: { richTray: true }, caniuse: { 'render.tray.content': true, 'render.tray.content.icon': true } });
+  await richOn.run('initial');
+  const richView = richOn.render();
+  assert.equal(richView.tray.title, '42%', 'fallback tray.title must remain 42%');
+  validateTrayContent(richView.tray.content, 'richTray.withIcon');
+  const richNodes = flatten(richView.tray.content);
+  assert(richNodes.some(n => n.type === 'Icon'), 'richTray with icon cap must include Icon');
+  const richTexts = richNodes.filter(n => n.type === 'Text').map(n => n.props.text);
+  assert(richTexts.includes('G 73%') && richTexts.includes('C 42%'), 'richTray must stack G 73% and C 42%');
+  const richNoIcon = setup({ inputs: { richTray: true }, caniuse: { 'render.tray.content': true, 'render.tray.content.icon': false } });
+  await richNoIcon.run('initial');
+  const richNoIconView = richNoIcon.render();
+  validateTrayContent(richNoIconView.tray.content, 'richTray.noIcon');
+  assert(!flatten(richNoIconView.tray.content).some(n => n.type === 'Icon'), 'richTray without icon cap must omit Icon');
+
+  // 21. Configurable lowQuotaThreshold & notchForecastAlert pace run-out warning
+  const customThr = setup({ inputs: { lowQuotaThreshold: 50, notchForecastAlert: false } });
+  await customThr.run('initial');
+  assert(customThr.render().notch.activity && customThr.render().notch.activity.id.includes(':low:'), 'lowQuotaThreshold=50 must trigger :low: notch activity for 42%');
+  assert.equal(customThr.call('quotaTone(42)'), 'warning', '42% must become warning tone when lowQuotaThreshold=50');
+  const paceIso = new Date(Date.now() + 4 * 3600e3).toISOString();
+  const fastBurnResp = async url => (url.endsWith(':retrieveUserQuotaSummary')
+    ? { groups: [{ displayName: 'Claude and GPT models', buckets: [{ bucketId: '3p-5h', window: '5h', remainingFraction: 0.55, resetTime: paceIso }] }] }
+    : url.endsWith(':fetchAvailableModels') ? { models: {} } : undefined);
+  const paceWarn = setup({ inputs: { lowQuotaThreshold: 20, notchForecastAlert: true }, respond: fastBurnResp });
+  await paceWarn.run('initial');
+  assert(paceWarn.render().notch.activity && paceWarn.render().notch.activity.id.includes(':pace:'), 'fast burn (55% left, 80% window left) must trigger :pace: notch activity');
+  const paceOff = setup({ inputs: { lowQuotaThreshold: 20, notchForecastAlert: false }, respond: fastBurnResp });
+  await paceOff.run('initial');
+  assert.equal(paceOff.render().notch.activity, undefined, 'notchForecastAlert=false must keep notch.activity undefined when 55% > 20%');
+
+  console.log('PASS: v1.4.0 full contract suite (21 checks: silent auth, 1-req polling, 420px HeroDualRings, PaceBar, A2 chips, SQLite trend/past, strict Widget subset, richTray, threshold/pace notch alerts)');
 })().catch(err => {
   console.error(err);
   process.exitCode = 1;
